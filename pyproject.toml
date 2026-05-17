@@ -1,0 +1,71 @@
+[project]
+name = "mini-agent"
+version = "0.1.0"
+description = "CLI Agent harness with local tools, memory, checkpointing, and prompt budgeting"
+readme = "README_CN.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Mini Agent Team"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+    "httpx>=0.27.0",
+    "requests>=2.31.0",
+    "tiktoken>=0.5.0",
+    "prompt-toolkit>=3.0.0",
+    "anthropic>=0.39.0",
+    "openai>=1.57.4",
+    "agent-client-protocol>=0.6.0",
+]
+
+[project.scripts]
+mini-agent = "mini_agent.cli:main"
+mini-agent-acp = "mini_agent.acp.server:main"
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=1.0.0",
+]
+dev = [
+    "pip>=25.3",
+    "pipx>=1.8.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "mcp>=1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["mini_agent*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+cache_dir = "workspace/.pytest_cache"
+asyncio_mode = "auto"
+
+[tool.pylint.messages_control]
+# Disable warnings for Tool.execute method signature differences
+# We intentionally use explicit parameters in subclasses for better type hints
+disable = [
+    "arguments-differ",  # Allow subclasses to have different parameter signatures
+]
+
+[dependency-groups]
+dev = [
+    "mcp>=1.0.0",
+    "pip>=25.3",
+    "pipx>=1.8.0",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
+]
