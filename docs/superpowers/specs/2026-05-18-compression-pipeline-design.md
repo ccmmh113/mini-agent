@@ -54,7 +54,7 @@ Responsibilities:
 - Estimate token usage using existing helpers from `context_budget.py`.
 - Clip oversized tool results.
 - Remove old non-protected history when budget pressure remains.
-- Apply age-based clipping to older tool results.
+- Apply age-based clipping only to compactable older tool results.
 - Preserve message order and tool-call pairing.
 - Report `snip_tokens_freed` so the pipeline can avoid unnecessary Auto-Compact calls when Snip already freed enough space.
 
@@ -188,10 +188,37 @@ Purpose: reduce old tool outputs without losing the shape of the conversation.
 Behavior:
 
 - Walk tool results from newest to oldest.
-- Keep newer tool results more intact.
-- Clip older tool results more aggressively.
+- Only compact results from tools whose output is recoverable or safely replaceable.
+- Keep newer compactable tool results more intact.
+- Clip older compactable tool results more aggressively.
 - Do not alter assistant tool-call messages.
 - Do not clip tool results in the active tool chain.
+- Do not clip non-compactable tool results.
+
+Initial compactable tool set:
+
+```python
+COMPACTABLE_TOOL_NAMES = {
+    "read_file",     # file content can be read again with path/offset/limit
+    "bash",          # output can often be re-observed by rerunning when safe and approved
+    "bash_output",   # background command output can be polled again while the process exists
+    "write_file",    # result is a short side-effect confirmation
+    "edit_file",     # result is a short side-effect confirmation
+    "recall_notes",  # memory retrieval can be queried again
+    "get_skill",     # skill content can be loaded again
+}
+```
+
+Non-compactable by default:
+
+- `record_note`: side-effectful memory write; do not encourage re-running it.
+- `task`: subagent output may be expensive or impossible to reconstruct exactly.
+- `bash_kill`: side-effectful process control.
+- MCP tools: unknown semantics unless a future metadata flag marks them compactable.
+
+Shell caveat:
+
+- Compacting `bash` output does not mean the model should blindly rerun the command. The compacted marker should say the command output was shortened and should only be rerun if the command is safe, useful, and passes normal confirmation/security policy.
 
 Initial retention tiers:
 
@@ -202,6 +229,12 @@ older tool results: keep up to 250 tokens each
 ```
 
 These constants should live on `MessageCompactor` so tests can override them without adding config surface area yet.
+
+Micro-Compact marker:
+
+```text
+[Tool result micro-compacted: tool=<name>, original_tokens=<N>, retained_tokens=<M>. Re-run or re-read only if safe and needed.]
+```
 
 ### Layer 4: Context Collapse
 
@@ -292,6 +325,9 @@ Required tests:
 - Snip removes a contiguous old-message block, inserts a boundary marker, and reports `snip_tokens_freed`.
 - Snip does not call the LLM and does not create a semantic summary of removed messages.
 - Micro-Compact clips older tool results more aggressively than newer results.
+- Micro-Compact only clips compactable tool names.
+- Micro-Compact leaves non-compactable tool results unchanged.
+- Micro-Compact leaves active tool-chain results unchanged even when their tool names are compactable.
 - Pipeline does not call `MessageSummarizer` when deterministic compaction brings the request below limit.
 - Pipeline uses the post-snip request estimate when deciding whether Auto-Compact should run.
 - Pipeline calls `MessageSummarizer` when deterministic compaction is insufficient.
