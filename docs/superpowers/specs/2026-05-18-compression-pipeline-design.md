@@ -47,7 +47,7 @@ There is no unified deterministic compaction stage before summarization. Large t
 
 ### MessageCompactor
 
-`MessageCompactor` owns deterministic transformations. It accepts full message history plus token budget settings and returns a compacted message list with metadata describing which layers changed the history.
+`MessageCompactor` owns deterministic transformations. It accepts full message history plus token budget settings and returns a `CompactionResult` containing the compacted message list plus metadata describing which layers changed the history.
 
 Responsibilities:
 
@@ -56,6 +56,7 @@ Responsibilities:
 - Remove old non-protected history when budget pressure remains.
 - Apply age-based clipping to older tool results.
 - Preserve message order and tool-call pairing.
+- Report `snip_tokens_freed` so the pipeline can avoid unnecessary Auto-Compact calls when Snip already freed enough space.
 
 It must not call the LLM.
 
@@ -80,13 +81,15 @@ run MessageCompactor:
   layer 3: Micro-Compact
 
 measure request again
-if still over limit:
+if still over limit after deterministic compaction:
   call MessageSummarizer
 
 return compacted messages
 ```
 
 `Agent.run()` should call this pipeline before building the final request for `llm.generate(...)`.
+
+The pipeline must base the Auto-Compact decision on the post-compaction request estimate, not the original pre-snip estimate. `snip_tokens_freed` is recorded for logging and tests, but the trigger condition is the current compacted context size.
 
 ## Layer Design
 
@@ -149,17 +152,32 @@ Implementation detail:
 
 ### Layer 2: Snip
 
-Purpose: remove old history only after large tool results have been clipped.
+Purpose: remove old history only after large tool results have been clipped, with zero LLM/API cost.
 
 Behavior:
 
-- Drop oldest non-system messages until the request is closer to budget.
+- Drop a contiguous block of the oldest removable messages near the beginning of the conversation until the request is closer to budget.
+- Do not summarize or paraphrase the removed content.
+- Insert a boundary marker where the removed block used to be, so the model knows earlier context was intentionally cleared.
+- Record `snip_tokens_freed`: the estimated tokens removed minus the boundary marker tokens.
 - Preserve:
   - the initial system message
   - harness summary system messages
   - the latest user turn
   - any active tool-call chain
   - assistant/tool pairs that would otherwise become invalid if only one side is removed
+
+Boundary marker format:
+
+```text
+[Context Snipped: <N> older messages removed, approximately <M> tokens freed. Earlier context is unavailable.]
+```
+
+Storage:
+
+- Use a named system message for the boundary marker, for example `CONTEXT_SNIP_MESSAGE_NAME = "context_snip_boundary"`.
+- Extend request-context assembly so snip boundary markers are preserved in the final prompt. They should not be treated as harness summaries because they contain no semantic summary.
+- Multiple snip markers may be coalesced into the latest marker if repeated snips happen in one run.
 
 This layer overlaps with existing `RequestContextBuilder` selection. The first implementation should keep `RequestContextBuilder` as the final request shaper, but put obvious old-message snipping in `MessageCompactor` so the persistent agent history can also shrink before summarization.
 
@@ -221,6 +239,13 @@ The estimate should include:
 
 The implementation can reuse `RequestContextBuilder.build(...)` to produce the measured request view, then use `estimate_messages_tokens(...)` and `estimate_tool_tokens(...)` from `context_budget.py`.
 
+Auto-Compact trigger rule:
+
+- Run deterministic compaction first when near the limit.
+- Rebuild and remeasure the request after Tool Result Budget, Snip, and Micro-Compact.
+- Invoke `MessageSummarizer` only if the post-compaction request still exceeds `hard_limit_ratio`.
+- Do not invoke `MessageSummarizer` merely because the pre-snip estimate exceeded the limit.
+
 ## Agent Integration
 
 `Agent.__init__` creates:
@@ -264,9 +289,11 @@ Required tests:
 - Spilled tool result references include a path and `read_file` offset/limit instructions.
 - Spilled files are written under `.mini_agent/tool-results/` and contain the full original result content.
 - Active tool chain is preserved raw.
-- Snip removes older user/assistant history before latest user turn.
+- Snip removes a contiguous old-message block, inserts a boundary marker, and reports `snip_tokens_freed`.
+- Snip does not call the LLM and does not create a semantic summary of removed messages.
 - Micro-Compact clips older tool results more aggressively than newer results.
 - Pipeline does not call `MessageSummarizer` when deterministic compaction brings the request below limit.
+- Pipeline uses the post-snip request estimate when deciding whether Auto-Compact should run.
 - Pipeline calls `MessageSummarizer` when deterministic compaction is insufficient.
 
 Keep existing tests:
