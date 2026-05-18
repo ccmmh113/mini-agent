@@ -20,7 +20,6 @@ The first version implements the first three layers from the proposed diagram: T
 
 ## Non-Goals
 
-- Do not implement real tool-result spill-to-disk in the first version.
 - Do not implement Context Collapse read-time projection in the first version.
 - Do not change checkpoint file format.
 - Do not add embeddings, vector search, or background compression.
@@ -93,26 +92,60 @@ return compacted messages
 
 ### Layer 1: Tool Result Budget
 
-Purpose: prevent one large tool result from dominating the context.
+Purpose: prevent one tool round from dominating the context while preserving full tool output on disk for later line-range reads.
 
 Behavior:
 
-- Inspect `role="tool"` messages.
-- If a tool result exceeds a per-message token budget, replace its content with a head/tail clipped version.
-- Include a clear marker showing the original result was compacted.
+- Inspect each completed tool round: an assistant message with `tool_calls`, followed by its corresponding consecutive `role="tool"` messages.
+- Mini Agent stores each tool result as its own `Message`, so the provider-level "one message with multiple tool results" maps to this consecutive tool-result round.
+- Apply two limits:
+  - a per-tool-result soft limit for individual oversized outputs
+  - a per-tool-round total limit of 200KB across all tool result contents in that round
+- If an individual tool result exceeds the per-tool-result limit, spill that result to disk even when the round total is still below 200KB.
+- If the tool round exceeds 200KB, sort the round's tool results by byte size descending.
+- Spill the largest results to disk until the remaining in-context tool result bytes are at or below 200KB.
+- Replace spilled tool message content with a compact reference containing:
+  - tool name
+  - `tool_call_id`
+  - original byte size
+  - spill file path
+  - read instructions using `read_file(path, offset, limit)`
+  - a small head/tail preview
 - Preserve:
   - `role`
   - `name`
   - `tool_call_id`
-  - success/error semantic text already present in content
+  - assistant `tool_calls`
+  - enough preview text for the model to decide whether to re-read the full artifact
+
+Spill directory:
+
+```text
+.mini_agent/tool-results/
+```
+
+Spill files should be plain UTF-8 text when possible, with deterministic metadata in the filename:
+
+```text
+step-<step>-<tool_call_id>-<tool_name>.txt
+```
+
+If a result is not valid text, store its string representation and mark that in the reference. The first version does not need binary reconstruction.
 
 First-version marker:
 
 ```text
-[Tool result compacted: original estimated tokens=<N>, retained head/tail excerpts]
+[Tool result stored on disk: original_bytes=<N>, path=<relative path>. Use read_file with offset/limit to inspect specific ranges.]
 ```
 
-No disk spill happens in version one. The "stored to disk" part of the diagram becomes a future implementation detail behind this same layer.
+This layer does not discard full content. It only removes large content from the prompt and leaves a recoverable pointer to a local file.
+
+Implementation detail:
+
+- `read_file` already supports `offset` and `limit`, so spilled files should be line-oriented and readable through the existing tool.
+- The compactor should create the spill directory under the current workspace's `.mini_agent` directory.
+- The compactor should not write outside the workspace.
+- The compactor should avoid rewriting the same content repeatedly when a message already points to a spill file.
 
 ### Layer 2: Snip
 
@@ -227,6 +260,9 @@ Add `tests/test_compression.py` for deterministic pipeline behavior.
 Required tests:
 
 - Large tool result is clipped and keeps `tool_call_id`.
+- A tool round whose combined tool result content exceeds 200KB spills the largest results until the in-context total is under 200KB.
+- Spilled tool result references include a path and `read_file` offset/limit instructions.
+- Spilled files are written under `.mini_agent/tool-results/` and contain the full original result content.
 - Active tool chain is preserved raw.
 - Snip removes older user/assistant history before latest user turn.
 - Micro-Compact clips older tool results more aggressively than newer results.
