@@ -1,6 +1,11 @@
 from mini_agent.request_context import RequestContextBuilder
 from mini_agent.schema import FunctionCall, Message, ToolCall
-from mini_agent.summarizer import HARNESS_SUMMARY_HEADER, HARNESS_SUMMARY_MESSAGE_NAME
+from mini_agent.summarizer import (
+    CONTEXT_COLLAPSE_MESSAGE_NAME,
+    CONTEXT_SNIP_MESSAGE_NAME,
+    HARNESS_SUMMARY_HEADER,
+    HARNESS_SUMMARY_MESSAGE_NAME,
+)
 
 
 def test_request_context_rebuilds_system_prompt_from_memory(tmp_path):
@@ -77,6 +82,46 @@ def test_request_context_injects_harness_summary_into_system_prompt(tmp_path):
     assert "## Harness Summary" in request[0].content
     assert "Read files and found the failing test." in request[0].content
     assert [message.content for message in request[1:]] == ["original question", "follow up"]
+
+
+def test_request_context_preserves_snip_boundary_as_history_message(tmp_path):
+    builder = RequestContextBuilder(core_prompt="System", workspace_dir=tmp_path, max_recent_messages=1)
+    messages = [
+        Message(role="system", content="old"),
+        Message(
+            role="system",
+            content="[Context Snipped: 4 older messages removed, approximately 100 tokens freed. Earlier context is unavailable.]",
+            name=CONTEXT_SNIP_MESSAGE_NAME,
+        ),
+        Message(role="user", content="follow up"),
+    ]
+
+    request = builder.build(messages)
+
+    assert "## Harness Summary" not in request[0].content
+    assert [message.name for message in request[1:]] == [CONTEXT_SNIP_MESSAGE_NAME, None]
+    assert request[1].role == "system"
+    assert request[2].content == "follow up"
+
+
+def test_request_context_preserves_context_collapse_boundary_as_history_message(tmp_path):
+    builder = RequestContextBuilder(core_prompt="System", workspace_dir=tmp_path, max_recent_messages=1)
+    messages = [
+        Message(role="system", content="old"),
+        Message(
+            role="system",
+            content="[Context Collapsed: 4 older messages hidden for this API call only.]",
+            name=CONTEXT_COLLAPSE_MESSAGE_NAME,
+        ),
+        Message(role="user", content="follow up"),
+    ]
+
+    request = builder.build(messages)
+
+    assert "## Harness Summary" not in request[0].content
+    assert [message.name for message in request[1:]] == [CONTEXT_COLLAPSE_MESSAGE_NAME, None]
+    assert request[1].role == "system"
+    assert request[2].content == "follow up"
 
 
 def test_request_context_uses_token_budget_for_recent_messages(tmp_path):

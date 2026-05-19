@@ -3,7 +3,13 @@
 from pathlib import Path
 from typing import Any
 
-from ..memory.markdown_store import MEMORY_TYPES, MarkdownMemoryStore, format_markdown_memories
+from ..memory.markdown_store import (
+    MEMORY_TYPES,
+    MarkdownMemoryStore,
+    format_markdown_memories,
+    format_markdown_memory_index,
+)
+from ..redaction import redact_text
 from .base import Tool, ToolResult
 
 
@@ -63,16 +69,25 @@ class SessionNoteTool(Tool):
         category: str | None = None,
     ) -> ToolResult:
         try:
+            redacted_content = redact_text(content)
+            redacted_name = redact_text(name) if name is not None else None
+            redacted_description = redact_text(description) if description is not None else None
+            secrets_redacted = (
+                redacted_content != content
+                or redacted_name != name
+                or redacted_description != description
+            )
             memory_type = type if type in MEMORY_TYPES else (_category_to_type(category) or "project")
             memory = self.store.save_memory(
-                content=content,
+                content=redacted_content,
                 memory_type=memory_type,
-                name=name,
-                description=description,
+                name=redacted_name,
+                description=redacted_description,
             )
+            suffix = " (secrets redacted)" if secrets_redacted else ""
             return ToolResult(
                 success=True,
-                content=f"Recorded memory: {memory.name} ({memory.type})",
+                content=f"Recorded memory: {memory.name} ({memory.type}){suffix}",
             )
         except Exception as e:
             return ToolResult(success=False, content="", error=f"Failed to record memory: {str(e)}")
@@ -140,7 +155,11 @@ class RecallNoteTool(Tool):
             memories = self.store.search(query=query, memory_type=memory_type, limit=limit)
             if not memories:
                 return ToolResult(success=True, content="No memory recorded yet.")
-            title = f"Relevant Memory for: {query}" if query else "Recorded Memory:"
+            if not query:
+                content = format_markdown_memory_index("Recorded Memory Index:", memories)
+                return ToolResult(success=True, content=content)
+
+            title = f"Relevant Memory for: {query}"
             return ToolResult(success=True, content=format_markdown_memories(title, memories))
         except Exception as e:
             return ToolResult(success=False, content="", error=f"Failed to recall memory: {str(e)}")

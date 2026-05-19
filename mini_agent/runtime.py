@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,11 +11,31 @@ from typing import Any, Awaitable, Callable, Protocol
 
 from .checkpoint import CheckpointStore
 from .logger import AgentLogger
+from .redaction import redact_data, redact_tool_result
 from .tools.base import Tool, ToolResult
+from .tools.file_tools import resolve_workspace_path
 from .tools.security import CommandSecurityDecision, check_command_security, requires_bash_confirmation, write_bash_audit_event
 from .tools.task_memory_tool import TaskMemoryHook
 
 ToolConfirmationCallback = Callable[[str, dict[str, Any], CommandSecurityDecision], Awaitable[bool]]
+
+
+@dataclass(frozen=True)
+class FileFingerprint:
+    """Stable evidence that a file was read at a specific content version."""
+
+    path: str
+    size_bytes: int
+    mtime_ns: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class WorkspaceFileState:
+    """Lightweight file state used for before/after workspace diffs."""
+
+    size_bytes: int
+    mtime_ns: int
 
 
 @dataclass
@@ -27,6 +48,7 @@ class RunContext:
     task_memory_hook: TaskMemoryHook | None = None
     tool_confirmation_callback: ToolConfirmationCallback | None = None
     cancel_event: asyncio.Event | None = None
+    read_snapshots: dict[str, FileFingerprint] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.workspace_dir = Path(self.workspace_dir)
@@ -55,6 +77,148 @@ class ToolObserver(Protocol):
 
     def on_tool_result(self, request: ToolExecutionRequest, result: ToolResult) -> None:
         """Record side effects after a tool result is available."""
+
+
+def _fingerprint_file(path: Path) -> FileFingerprint:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    stat = path.stat()
+    return FileFingerprint(
+        path=str(path),
+        size_bytes=stat.st_size,
+        mtime_ns=stat.st_mtime_ns,
+        sha256=digest.hexdigest(),
+    )
+
+
+def _tool_workspace_dir(request: ToolExecutionRequest) -> Path:
+    tool_workspace = getattr(request.tool, "workspace_dir", None) if request.tool is not None else None
+    return Path(tool_workspace) if tool_workspace else request.context.workspace_dir
+
+
+def _resolve_tool_path(request: ToolExecutionRequest) -> Path:
+    path = request.arguments.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("Missing required file path")
+    return resolve_workspace_path(path, _tool_workspace_dir(request))
+
+
+def _workspace_snapshot(workspace_dir: Path) -> dict[str, WorkspaceFileState]:
+    workspace = workspace_dir.resolve(strict=False)
+    ignored_dirs = {".git", ".mini_agent", "__pycache__", ".pytest_cache"}
+    snapshot: dict[str, WorkspaceFileState] = {}
+
+    if not workspace.exists():
+        return snapshot
+
+    for path in workspace.rglob("*"):
+        try:
+            relative = path.relative_to(workspace)
+        except ValueError:
+            continue
+        if any(part in ignored_dirs for part in relative.parts):
+            continue
+        if not path.is_file():
+            continue
+
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        snapshot[relative.as_posix()] = WorkspaceFileState(size_bytes=stat.st_size, mtime_ns=stat.st_mtime_ns)
+
+    return snapshot
+
+
+def _workspace_diff(
+    before: dict[str, WorkspaceFileState],
+    after: dict[str, WorkspaceFileState],
+) -> dict[str, list[str]]:
+    before_paths = set(before)
+    after_paths = set(after)
+    shared_paths = before_paths & after_paths
+    return {
+        "created": sorted(after_paths - before_paths),
+        "modified": sorted(path for path in shared_paths if before[path] != after[path]),
+        "deleted": sorted(before_paths - after_paths),
+    }
+
+
+def _affected_paths(diff: dict[str, list[str]]) -> list[str]:
+    return sorted({path for paths in diff.values() for path in paths})
+
+
+def _format_workspace_diff(diff: dict[str, list[str]]) -> str:
+    lines = ["[workspace_diff]"]
+    for key in ("created", "modified", "deleted"):
+        values = diff.get(key, [])
+        if values:
+            lines.append(f"{key}: {', '.join(values)}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _attach_workspace_diff(result: ToolResult, diff: dict[str, list[str]]) -> ToolResult:
+    affected = _affected_paths(diff)
+    if not affected:
+        return result
+
+    metadata = {
+        **result.metadata,
+        "workspace_diff": diff,
+        "affected_paths": affected,
+    }
+    diff_summary = _format_workspace_diff(diff)
+    updates: dict[str, Any] = {"metadata": metadata}
+
+    if result.success:
+        content = result.content or ""
+        updates["content"] = f"{content}\n\n{diff_summary}" if content else diff_summary
+    else:
+        error = result.error or "Tool failed"
+        updates["error"] = f"{error}\n\n{diff_summary}"
+
+    return result.model_copy(update=updates)
+
+
+class FreshReadPolicy:
+    """Require a current read_file snapshot before modifying existing files."""
+
+    MUTATING_FILE_TOOLS = {"write_file", "edit_file"}
+
+    async def before_execute(self, request: ToolExecutionRequest) -> ToolResult | None:
+        if request.tool_name not in self.MUTATING_FILE_TOOLS:
+            return None
+
+        try:
+            file_path = _resolve_tool_path(request)
+        except ValueError as exc:
+            return ToolResult(success=False, content="", error=str(exc))
+
+        if not file_path.exists():
+            return None
+        if not file_path.is_file():
+            return ToolResult(success=False, content="", error=f"Path is not a file: {file_path}")
+
+        current = _fingerprint_file(file_path)
+        previous = request.context.read_snapshots.get(str(file_path))
+        if previous is None:
+            return ToolResult(
+                success=False,
+                content="",
+                error=f"Fresh read required before modifying existing file: {file_path}",
+            )
+
+        if previous.sha256 != current.sha256:
+            return ToolResult(
+                success=False,
+                content="",
+                error=f"File changed since last read; read_file must be called again before modifying: {file_path}",
+            )
+
+        return None
 
 
 class BashToolPolicy:
@@ -86,6 +250,9 @@ class BashToolPolicy:
                     content="",
                     error="Command execution denied by user confirmation policy.",
                 )
+
+        if decision:
+            self._write_audit_event(request, decision, "allowed")
 
         return None
 
@@ -157,16 +324,32 @@ class RuntimeToolObserver:
     """Persist standard runtime side effects after each tool call."""
 
     def on_tool_result(self, request: ToolExecutionRequest, result: ToolResult) -> None:
+        if request.tool_name == "read_file" and result.success:
+            self._record_read_snapshot(request)
+
         request.context.logger.log_tool_result(
             tool_name=request.tool_name,
-            arguments=request.arguments,
+            arguments=redact_data(request.arguments),
             result_success=result.success,
             result_content=result.content if result.success else None,
             result_error=result.error if not result.success else None,
+            metadata=result.metadata,
         )
 
         if request.context.task_memory_hook is not None:
-            request.context.task_memory_hook.record_tool_result(request.tool_name, request.arguments, result)
+            request.context.task_memory_hook.record_tool_result(
+                request.tool_name,
+                redact_data(request.arguments),
+                result,
+            )
+
+    def _record_read_snapshot(self, request: ToolExecutionRequest) -> None:
+        try:
+            file_path = _resolve_tool_path(request)
+        except ValueError:
+            return
+        if file_path.exists() and file_path.is_file():
+            request.context.read_snapshots[str(file_path)] = _fingerprint_file(file_path)
 
 
 class ToolRuntime:
@@ -181,7 +364,7 @@ class ToolRuntime:
     ):
         self.tools = tools
         self.context = context
-        self.policies = policies if policies is not None else [BashToolPolicy()]
+        self.policies = policies if policies is not None else [FreshReadPolicy(), BashToolPolicy()]
         self.observers = observers if observers is not None else [RuntimeToolObserver()]
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
@@ -194,10 +377,14 @@ class ToolRuntime:
             self._notify_observers(request, result)
             return result
 
+        before_snapshot: dict[str, WorkspaceFileState] | None = None
         try:
             result = await self._run_policies(request)
             if result is None:
+                before_snapshot = _workspace_snapshot(self.context.workspace_dir)
                 result = await tool.execute(**arguments)
+                after_snapshot = _workspace_snapshot(self.context.workspace_dir)
+                result = _attach_workspace_diff(result, _workspace_diff(before_snapshot, after_snapshot))
         except Exception as exc:
             error_detail = f"{type(exc).__name__}: {str(exc)}"
             error_trace = traceback.format_exc()
@@ -206,7 +393,11 @@ class ToolRuntime:
                 content="",
                 error=f"Tool execution failed: {error_detail}\n\nTraceback:\n{error_trace}",
             )
+            if before_snapshot is not None:
+                after_snapshot = _workspace_snapshot(self.context.workspace_dir)
+                result = _attach_workspace_diff(result, _workspace_diff(before_snapshot, after_snapshot))
 
+        result = redact_tool_result(result)
         self._notify_observers(request, result)
         return result
 

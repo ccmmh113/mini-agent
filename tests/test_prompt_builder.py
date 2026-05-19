@@ -5,7 +5,7 @@ from pathlib import Path
 
 from mini_agent.context_budget import PromptLayerBudgets
 from mini_agent.memory.markdown_store import MarkdownMemoryStore
-from mini_agent.prompt_builder import SystemPromptBuilder
+from mini_agent.prompt_builder import SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SystemPromptBuilder
 
 
 class FakeSkillLoader:
@@ -17,9 +17,10 @@ class FakeSkillLoader:
 
 def test_system_prompt_builder_renders_layers(tmp_path: Path):
     MarkdownMemoryStore(tmp_path / ".memory").save_memory(
-        content="The user prefers concise implementation summaries.",
+        content="Full durable note: the user prefers concise implementation summaries with detailed examples kept out of startup context.",
         memory_type="user",
         name="concise-summaries",
+        description="User prefers concise implementation summaries",
     )
     (tmp_path / "AGENTS.md").write_text("Use focused tests before broad tests.", encoding="utf-8")
 
@@ -34,14 +35,20 @@ def test_system_prompt_builder_renders_layers(tmp_path: Path):
     assert "{SKILLS_METADATA}" not in prompt
     assert "## Skills" in prompt
     assert "- python: Python workflow guidance" in prompt
-    assert "## Long-Term Memory" in prompt
-    assert "The user prefers concise implementation summaries." in prompt
+    assert "## Long-Term Memory Index" in prompt
+    assert "Use `recall_notes`" in prompt
+    assert "Verify remembered files, commands, APIs, dependencies, and behavior" in prompt
+    assert "- [concise-summaries](concise-summaries.md) `user`" in prompt
+    assert "Full durable note:" not in prompt
     assert "## Project Rules" in prompt
     assert "Use focused tests before broad tests." in prompt
     assert "## Current Task Context" not in prompt
     assert "## Dynamic Context" in prompt
     assert f"Current workspace: `{tmp_path.resolve()}`" in prompt
     assert "2026-05-16T10:30:00" in prompt
+    assert SYSTEM_PROMPT_DYNAMIC_BOUNDARY in prompt
+    assert prompt.index("Core instructions") < prompt.index(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+    assert prompt.index(SYSTEM_PROMPT_DYNAMIC_BOUNDARY) < prompt.index("## Skills")
 
 
 def test_system_prompt_builder_omits_empty_optional_layers(tmp_path: Path):
@@ -179,3 +186,18 @@ def test_system_prompt_builder_includes_archived_task_summary(tmp_path: Path):
     ).build()
 
     assert "- Archived earlier progress: [2026-05-16T10:30:00] Archived 35 earlier completed steps: alpha; beta; gamma" in prompt
+
+
+def test_prompt_sections_expose_static_and_dynamic_parts(tmp_path: Path):
+    sections = SystemPromptBuilder(
+        core_prompt="Core only",
+        workspace_dir=tmp_path,
+        skill_loader=FakeSkillLoader(),
+        now=datetime(2026, 5, 16, 10, 30, 0),
+    ).build_sections()
+
+    assert sections.render_static() == "Core only"
+    assert "## Skills" in sections.render_dynamic()
+    assert "## Dynamic Context" in sections.render_dynamic()
+    assert SYSTEM_PROMPT_DYNAMIC_BOUNDARY in sections.render()
+    assert sections.static_cache_fingerprint() == "342187d847e7a69e84f355c95f4e9bcf8594242444690c80a77cfea7bafb1b24"

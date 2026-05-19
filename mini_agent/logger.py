@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .redaction import redact_data
 from .schema import Message, TokenUsage, ToolCall
 
 
@@ -59,12 +60,12 @@ class AgentLogger:
         for msg in messages:
             msg_dict = {
                 "role": msg.role,
-                "content": msg.content,
+                "content": redact_data(msg.content),
             }
             if msg.thinking:
-                msg_dict["thinking"] = msg.thinking
+                msg_dict["thinking"] = redact_data(msg.thinking)
             if msg.tool_calls:
-                msg_dict["tool_calls"] = [tc.model_dump() for tc in msg.tool_calls]
+                msg_dict["tool_calls"] = redact_data([tc.model_dump() for tc in msg.tool_calls])
             if msg.tool_call_id:
                 msg_dict["tool_call_id"] = msg.tool_call_id
             if msg.name:
@@ -102,14 +103,14 @@ class AgentLogger:
 
         # Build complete response data structure
         response_data = {
-            "content": content,
+            "content": redact_data(content),
         }
 
         if thinking:
-            response_data["thinking"] = thinking
+            response_data["thinking"] = redact_data(thinking)
 
         if tool_calls:
-            response_data["tool_calls"] = [tc.model_dump() for tc in tool_calls]
+            response_data["tool_calls"] = redact_data([tc.model_dump() for tc in tool_calls])
 
         if finish_reason:
             response_data["finish_reason"] = finish_reason
@@ -129,6 +130,7 @@ class AgentLogger:
         result_success: bool,
         result_content: str | None = None,
         result_error: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
         """Log tool execution result
 
@@ -144,14 +146,16 @@ class AgentLogger:
         # Build complete tool execution result data structure
         tool_result_data = {
             "tool_name": tool_name,
-            "arguments": arguments,
+            "arguments": redact_data(arguments),
             "success": result_success,
         }
 
         if result_success:
-            tool_result_data["result"] = result_content
+            tool_result_data["result"] = redact_data(result_content)
         else:
-            tool_result_data["error"] = result_error
+            tool_result_data["error"] = redact_data(result_error)
+        if metadata:
+            tool_result_data["metadata"] = redact_data(metadata)
 
         # Format as JSON
         content = "Tool Execution:\n\n"

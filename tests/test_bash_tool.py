@@ -6,6 +6,7 @@ import platform
 
 import pytest
 
+from mini_agent.runtime import RunContext, ToolRuntime
 from mini_agent.tools.bash_tool import BackgroundShellManager, BashKillTool, BashOutputTool, BashTool
 from mini_agent.tools.security import BashSecurityPolicy, check_command_security
 
@@ -282,12 +283,11 @@ async def test_timeout_validation():
 @pytest.mark.asyncio
 async def test_security_blocks_dangerous_command(tmp_path):
     """Test dangerous shell commands are blocked before execution."""
-    bash_tool = BashTool(workspace_dir=str(tmp_path))
+    runtime = ToolRuntime({"bash": BashTool(workspace_dir=str(tmp_path))}, RunContext(workspace_dir=tmp_path))
 
-    result = await bash_tool.execute(command="rm -rf ./important")
+    result = await runtime.execute("bash", {"command": "rm -rf ./important"})
 
     assert not result.success
-    assert result.exit_code == -1
     assert "blocked by security policy" in result.error.lower()
 
 
@@ -303,9 +303,9 @@ def test_security_parses_quoted_command_head(tmp_path):
 async def test_security_blocks_absolute_path_outside_workspace(tmp_path):
     """Test commands that reference paths outside the workspace are blocked."""
     outside_file = tmp_path.parent / "outside_workspace.txt"
-    bash_tool = BashTool(workspace_dir=str(tmp_path))
+    runtime = ToolRuntime({"bash": BashTool(workspace_dir=str(tmp_path))}, RunContext(workspace_dir=tmp_path))
 
-    result = await bash_tool.execute(command=f"echo {outside_file}")
+    result = await runtime.execute("bash", {"command": f"echo {outside_file}"})
 
     assert not result.success
     assert "outside workspace" in result.error.lower()
@@ -316,8 +316,9 @@ async def test_security_audit_log_records_allowed_and_completed_events(tmp_path)
     """Test allowed commands write audit events."""
     policy = BashSecurityPolicy(audit_enabled=True)
     bash_tool = BashTool(workspace_dir=str(tmp_path), security_policy=policy)
+    runtime = ToolRuntime({"bash": bash_tool}, RunContext(workspace_dir=tmp_path))
 
-    result = await bash_tool.execute(command="echo audit-ok")
+    result = await runtime.execute("bash", {"command": "echo audit-ok"})
 
     assert result.success
 

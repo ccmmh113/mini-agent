@@ -1,0 +1,143 @@
+{
+  "benchmark": "module",
+  "module_count": 3,
+  "case_count": 11,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "duration_seconds": 12.1596,
+  "modules": {
+    "compression": {
+      "module": "compression",
+      "case_count": 5,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "tokens_saved": 65158,
+      "cases": [
+        {
+          "case": "tool_result_budget",
+          "before_tokens": 50141,
+          "after_tokens": 779,
+          "tokens_saved": 49362,
+          "compression_ratio": 0.9845,
+          "tool_results_spilled": 3,
+          "tool_result_files": 3,
+          "tool_call_ids_preserved": true,
+          "current_user_message_preserved": true,
+          "passed": true
+        },
+        {
+          "case": "snip",
+          "before_tokens": 7853,
+          "after_tokens": 1164,
+          "tokens_saved": 6689,
+          "compression_ratio": 0.8518,
+          "snipped_messages": 24,
+          "snip_tokens_freed": 6689,
+          "snip_marker_present": true,
+          "current_user_message_preserved": true,
+          "passed": true
+        },
+        {
+          "case": "micro_compact",
+          "before_tokens": 14851,
+          "after_tokens": 6019,
+          "tokens_saved": 8832,
+          "compression_ratio": 0.5947,
+          "micro_compacted_results": 8,
+          "micro_marker_present": true,
+          "retention_varies_by_age": true,
+          "current_user_message_preserved": true,
+          "passed": true
+        },
+        {
+          "case": "context_collapse",
+          "before_tokens": 4547,
+          "after_tokens": 4272,
+          "tokens_saved": 275,
+          "compression_ratio": 0.0605,
+          "collapsed_messages": 2,
+          "collapse_tokens_freed": 275,
+          "collapse_marker_present": true,
+          "original_history_unchanged": true,
+          "auto_compact_avoided": true,
+          "current_user_message_preserved": true,
+          "passed": true
+        },
+        {
+          "case": "auto_compact_fallback",
+          "before_tokens": 4014,
+          "after_tokens": 4020,
+          "tokens_saved": 0,
+          "compression_ratio": 0.0,
+          "auto_compact_called": true,
+          "latest_user_preserved": true,
+          "passed": true
+        }
+      ]
+    },
+    "memory": {
+      "module": "memory",
+      "case_count": 3,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "tokens_saved": 0,
+      "cases": [
+        {
+          "case": "index_and_recall",
+          "memory_index_loaded": true,
+          "topic_memory_loaded_on_demand": true,
+          "memory_helped_answer": true,
+          "prompt_memory_tokens": 79,
+          "memory_not_overloaded": true,
+          "passed": true
+        },
+        {
+          "case": "secret_redaction",
+          "secret_redacted_before_write": true,
+          "raw_secret_absent_from_files": true,
+          "memory_files_written": 2,
+          "passed": true
+        },
+        {
+          "case": "stale_memory_guard",
+          "stale_warning_present": true,
+          "remembered_file_missing": true,
+          "stale_memory_blind_trust": false,
+          "passed": true
+        }
+      ]
+    },
+    "checkpoint": {
+      "module": "checkpoint",
+      "case_count": 3,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "tokens_saved": 0,
+      "cases": [
+        {
+          "case": "save_and_validate",
+          "checkpoint_created": true,
+          "latest_checkpoint_valid_json": true,
+          "checkpoint_reason_correct": true,
+          "valid_message_count": 3,
+          "history_files": 1,
+          "passed": true
+        },
+        {
+          "case": "restore_messages",
+          "messages_restored": true,
+          "workspace_validation_passed": true,
+          "restore_status_available": true,
+          "passed": true
+        },
+        {
+          "case": "resume_continues_task",
+          "messages_restored": true,
+          "resume_continues_task": true,
+          "resume_summary_available": true,
+          "passed": true
+        }
+      ]
+    }
+  }
+}

@@ -31,6 +31,51 @@ async def test_record_and_recall_markdown_memory(tmp_path: Path):
     assert result.success
     assert "concise-responses" in result.content
     assert "The user prefers concise responses." in result.content
+    assert "may be stale" in result.content
+
+
+@pytest.mark.asyncio
+async def test_recall_without_query_returns_index_only(tmp_path: Path):
+    memory_dir = tmp_path / ".memory"
+    record_tool = SessionNoteTool(memory_dir=str(memory_dir))
+    recall_tool = RecallNoteTool(memory_dir=str(memory_dir))
+
+    result = await record_tool.execute(
+        content="Detailed deployment runbook: run scripts/deploy.ps1 only after the release lock clears.",
+        type="project",
+        name="deploy-runbook",
+        description="Deployment runbook summary",
+    )
+    assert result.success
+
+    result = await recall_tool.execute()
+
+    assert result.success
+    assert "Recorded Memory Index:" in result.content
+    assert "deploy-runbook" in result.content
+    assert "Deployment runbook summary" in result.content
+    assert "Detailed deployment runbook:" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_record_note_redacts_secrets_before_writing(tmp_path: Path):
+    memory_dir = tmp_path / ".memory"
+    record_tool = SessionNoteTool(memory_dir=str(memory_dir))
+
+    result = await record_tool.execute(
+        content="api_key=sk-testsecret12345678901234567890",
+        type="project",
+        name="secret-note",
+        description="Token value sk-testsecret12345678901234567890",
+    )
+
+    assert result.success
+    assert "secrets redacted" in result.content
+    memory_text = (memory_dir / "secret-note.md").read_text(encoding="utf-8")
+    index_text = (memory_dir / "MEMORY.md").read_text(encoding="utf-8")
+    assert "sk-testsecret" not in memory_text
+    assert "sk-testsecret" not in index_text
+    assert "[REDACTED]" in memory_text
 
 
 @pytest.mark.asyncio
@@ -112,3 +157,24 @@ def test_markdown_memory_delete_updates_index(tmp_path: Path):
     assert not (tmp_path / ".memory" / "incident-board.md").exists()
     assert "incident-board" not in (tmp_path / ".memory" / "MEMORY.md").read_text(encoding="utf-8")
     assert not store.delete("missing")
+
+
+def test_memory_index_uses_single_line_clipped_descriptions(tmp_path: Path):
+    store = MarkdownMemoryStore(tmp_path / ".memory")
+    long_description = ("alpha " * 15).strip() + "\nsecond line should be collapsed " + ("beta " * 40).strip()
+
+    store.save_memory(
+        content="Body text should live in the topic file only.",
+        memory_type="project",
+        name="long-description",
+        description=long_description,
+    )
+
+    index_text = (tmp_path / ".memory" / "MEMORY.md").read_text(encoding="utf-8")
+    bullet = next(line for line in index_text.splitlines() if line.startswith("- [long-description]"))
+    rendered_description = bullet.split(" - ", 1)[1]
+
+    assert "`project` updated=" in bullet
+    assert len(rendered_description) <= 150
+    assert "second line" in rendered_description
+    assert "Body text should live" not in index_text

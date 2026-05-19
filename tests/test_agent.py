@@ -274,6 +274,32 @@ async def test_checkpoint_after_cancellation_keeps_last_committed_state(tmp_path
     assert [message["role"] for message in latest["messages"]] == ["system", "user"]
 
 
+@pytest.mark.asyncio
+async def test_agent_uses_compression_pipeline_before_final_request(tmp_path):
+    llm_client = MagicMock(spec=LLMClient)
+    llm_client.generate = AsyncMock(return_value=LLMResponse(content="done", tool_calls=None, finish_reason="stop"))
+    agent = Agent(
+        llm_client=llm_client,
+        system_prompt="System",
+        tools=[DummyTool()],
+        workspace_dir=str(tmp_path),
+    )
+    agent.add_user_message("original user")
+    compressed_messages = [
+        Message(role="system", content="System"),
+        Message(role="user", content="compressed user"),
+    ]
+    agent.compression_pipeline = MagicMock()
+    agent.compression_pipeline.compress_before_request = AsyncMock(return_value=compressed_messages)
+
+    result = await agent.run()
+
+    assert result == "done"
+    agent.compression_pipeline.compress_before_request.assert_awaited_once()
+    request_messages = llm_client.generate.await_args.kwargs["messages"]
+    assert [message.content for message in request_messages[1:]] == ["compressed user"]
+
+
 def test_checkpoint_store_can_restore_messages(tmp_path):
     checkpoint_store = CheckpointStore(tmp_path / ".mini_agent" / "checkpoints")
     original_messages = [

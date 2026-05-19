@@ -102,7 +102,7 @@ class MiniMaxACPAgent:
         if not workspace.is_absolute():
             workspace = workspace.resolve()
         tools = list(self._base_tools)
-        add_workspace_tools(tools, self._config, workspace)
+        add_workspace_tools(tools, self._config, workspace, self._llm)
         system_prompt = SystemPromptBuilder(
             core_prompt=self._system_prompt,
             workspace_dir=workspace,
@@ -175,17 +175,10 @@ class MiniMaxACPAgent:
                 args_preview = ", ".join(f"{k}={repr(v)[:50]}" for k, v in list(args.items())[:2]) if isinstance(args, dict) else ""
                 label = f"🔧 {name}({args_preview})" if args_preview else f"🔧 {name}()"
                 await self._send(session_id, start_tool_call(call.id, label, kind="execute", raw_input=args))
-                tool = agent.tools.get(name)
-                if not tool:
-                    text, status = f"[ERROR] Unknown tool: {name}", "failed"
-                else:
-                    try:
-                        result = await tool.execute(**args)
-                        status = "completed" if result.success else "failed"
-                        prefix = "[OK]" if result.success else "[ERROR]"
-                        text = f"{prefix} {result.content if result.success else result.error or 'Tool execution failed'}"
-                    except Exception as exc:
-                        status, text = "failed", f"[ERROR] Tool error: {exc}"
+                result = await agent.tool_runtime.execute(name, args)
+                status = "completed" if result.success else "failed"
+                prefix = "[OK]" if result.success else "[ERROR]"
+                text = f"{prefix} {result.content if result.success else result.error or 'Tool execution failed'}"
                 await self._send(session_id, update_tool_call(call.id, status=status, content=[tool_content(text_block(text))], raw_output=text))
                 agent.messages.append(Message(role="tool", content=text, tool_call_id=call.id, name=name))
         return "max_turn_requests"

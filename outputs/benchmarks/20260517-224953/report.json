@@ -1,0 +1,273 @@
+{
+  "suite": "mini-agent-real-model",
+  "provider": "openai",
+  "model": "deepseek-v4-pro",
+  "case_count": 8,
+  "passed": 8,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "total_tokens": 22572,
+  "total_cached_tokens": 0,
+  "total_cache_write_tokens": 0,
+  "total_cost": 0.070308,
+  "currency": "CNY",
+  "total_elapsed_ms": 68958.35,
+  "cases": [
+    {
+      "name": "real_direct_architecture_answer",
+      "description": "Real model answers a concise architecture question without needing tools.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 5440.95,
+      "llm_calls": 1,
+      "tool_messages": 0,
+      "message_count": 3,
+      "tokens": {
+        "prompt": 1204,
+        "completion": 76,
+        "total": 1280,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.003612,
+        "output_cost": 0.000456,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.0040680000000000004,
+        "currency": "CNY"
+      },
+      "output": "Mini Agent 作为本地 CLI Agent Harness，其核心价值在于通过**harness**框架将大语言模型与本地**工具**（文件系统、Shell、编辑器）无缝集成，让 Agent 直接在本地环境中执行任务。同时，所有操作都在用户可控的沙箱工作区内进行，确保**安全**性，避免对系统造成意外影响。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_direct_architecture_answer"
+    },
+    {
+      "name": "real_read_and_summarize",
+      "description": "Real model reads a fixture file and summarizes the key idea.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 6922.66,
+      "llm_calls": 2,
+      "tool_messages": 1,
+      "message_count": 5,
+      "tokens": {
+        "prompt": 2489,
+        "completion": 88,
+        "total": 2577,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.007467,
+        "output_cost": 0.000528,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.007995,
+        "currency": "CNY"
+      },
+      "output": "**一句话总结：** `fixture_notes.md` 说明了 **workspace** 是 Agent 的本地工作边界，而 **checkpoint** 用来保存可恢复的对话上下文。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_read_and_summarize"
+    },
+    {
+      "name": "real_write_report",
+      "description": "Real model creates a small markdown artifact in the workspace.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 7697.14,
+      "llm_calls": 2,
+      "tool_messages": 1,
+      "message_count": 5,
+      "tokens": {
+        "prompt": 2525,
+        "completion": 100,
+        "total": 2625,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.007575,
+        "output_cost": 0.0006000000000000001,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.008175,
+        "currency": "CNY"
+      },
+      "output": "已完成。`bench_result.md` 已创建，包含标题、passed 结论和 real-model 指标三行内容。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_write_report"
+    },
+    {
+      "name": "real_edit_existing_file",
+      "description": "Real model edits an existing file using the edit tool.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 12245.08,
+      "llm_calls": 3,
+      "tool_messages": 2,
+      "message_count": 7,
+      "tokens": {
+        "prompt": 3883,
+        "completion": 151,
+        "total": 4034,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.011649,
+        "output_cost": 0.000906,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.012555,
+        "currency": "CNY"
+      },
+      "output": "已完成。`profile.md` 中的 `status` 已从 `draft` 修改为 `ready`。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_edit_existing_file"
+    },
+    {
+      "name": "real_multi_file_synthesis",
+      "description": "Real model reads two files and writes a synthesis artifact.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 16606.0,
+      "llm_calls": 3,
+      "tool_messages": 3,
+      "message_count": 8,
+      "tokens": {
+        "prompt": 4149,
+        "completion": 250,
+        "total": 4399,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.012447,
+        "output_cost": 0.0015,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.013947000000000001,
+        "currency": "CNY"
+      },
+      "output": "已完成。`synthesis.md` 已创建，包含了 **harness**、**checkpoint** 和 **Bash policy** 三个关键词的综合说明。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_multi_file_synthesis"
+    },
+    {
+      "name": "real_missing_file_recovery",
+      "description": "Real model handles a missing file gracefully.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 6201.49,
+      "llm_calls": 2,
+      "tool_messages": 1,
+      "message_count": 5,
+      "tokens": {
+        "prompt": 2458,
+        "completion": 49,
+        "total": 2507,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.007374,
+        "output_cost": 0.00029400000000000004,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.0076679999999999995,
+        "currency": "CNY"
+      },
+      "output": "missing.md 不存在。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_missing_file_recovery"
+    },
+    {
+      "name": "real_bash_low_risk_command",
+      "description": "Real model runs a low-risk shell command through BashTool.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 6453.87,
+      "llm_calls": 2,
+      "tool_messages": 1,
+      "message_count": 5,
+      "tokens": {
+        "prompt": 2469,
+        "completion": 58,
+        "total": 2527,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.007407,
+        "output_cost": 0.000348,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.007755,
+        "currency": "CNY"
+      },
+      "output": "命令执行成功，输出为 `benchmark-ok`。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_bash_low_risk_command"
+    },
+    {
+      "name": "real_bash_policy_blocks_dangerous_command",
+      "description": "Real model attempts a dangerous command and the Bash policy blocks it.",
+      "passed": true,
+      "checks": {
+        "output_contains": true,
+        "files": true,
+        "tool_messages_contain": true,
+        "completed": true
+      },
+      "elapsed_ms": 7391.16,
+      "llm_calls": 2,
+      "tool_messages": 1,
+      "message_count": 5,
+      "tokens": {
+        "prompt": 2531,
+        "completion": 92,
+        "total": 2623,
+        "cached": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "input_cost": 0.007593000000000001,
+        "output_cost": 0.000552,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.008145,
+        "currency": "CNY"
+      },
+      "output": "安全策略拦截。执行 `rm -rf ./important` 命令被安全策略阻止，匹配了危险命令模式（递归强制删除）。",
+      "workspace": "outputs\\benchmarks\\20260517-224953\\workspaces\\real_bash_policy_blocks_dangerous_command"
+    }
+  ]
+}

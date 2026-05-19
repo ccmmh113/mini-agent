@@ -277,11 +277,19 @@ class EditTool(Tool):
 
             content = file_path.read_text(encoding="utf-8")
 
-            if old_str not in content:
+            if old_str == "":
                 return ToolResult(
                     success=False,
                     content="",
-                    error=f"Text not found in file: {old_str}",
+                    error="old_str must not be empty",
+                )
+
+            match_count = content.count(old_str)
+            if match_count != 1:
+                return ToolResult(
+                    success=False,
+                    content="",
+                    error=f"Text must appear exactly once in file; found {match_count} matches",
                 )
 
             new_content = content.replace(old_str, new_str)

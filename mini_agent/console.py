@@ -49,10 +49,10 @@ class AgentConsoleRenderer:
             f"\n{Colors.BRIGHT_YELLOW}📊 Token usage - Local estimate: {estimated_tokens}, "
             f"API reported: {api_total_tokens}, Limit: {token_limit}{Colors.RESET}"
         )
-        print(f"{Colors.BRIGHT_YELLOW}🔄 Triggering message history summarization...{Colors.RESET}")
+        print(f"{Colors.BRIGHT_YELLOW}🔄 L5 Auto-Compact: summarizing full historical context...{Colors.RESET}")
 
     def summary_insufficient_messages(self) -> None:
-        print(f"{Colors.BRIGHT_YELLOW}⚠️  Insufficient messages, cannot summarize{Colors.RESET}")
+        print(f"{Colors.BRIGHT_YELLOW}⚠️  L5 Auto-Compact skipped: no compressible historical context{Colors.RESET}")
 
     def summary_round_success(self, round_num: int) -> None:
         print(f"{Colors.BRIGHT_GREEN}✓ Summary for round {round_num} generated successfully{Colors.RESET}")

@@ -15,7 +15,7 @@ Mini Agent 是一个面向本地项目工作的 CLI Agent harness。它负责把
 - 会话 checkpoint 恢复：`.mini_agent/checkpoints/`
 - 任务完成 episode 记录：`.mini_agent/episodes.jsonl`
 - 分层 prompt 拼装与 10000 token 默认预算
-- 历史 assistant/tool 执行轨迹摘要压缩
+- 分层上下文压缩：工具结果预算、Snip、Micro-Compact、Context Collapse 和摘要 fallback
 - 可选 Subagent：通过 `task` 工具把局部任务委派给隔离子 Agent
 - 可选 Skills 与 MCP 工具加载
 
@@ -140,8 +140,10 @@ mini-agent --task "修复测试失败"
   -> CLI 加载配置、LLM、工具、记忆和 checkpoint
   -> Agent.add_user_message()
   -> Agent.run()
-  -> RequestContextBuilder 预构建预算上下文
-  -> MessageSummarizer 必要时压缩旧 assistant/tool 轨迹
+  -> CompressionPipeline 测量并按需压缩上下文
+  -> MessageCompactor 先做 Tool Result Budget / Snip / Micro-Compact
+  -> ContextCollapser 在读时生成临时压缩视图
+  -> MessageSummarizer 仅在前四层后仍超限时生成全量历史摘要
   -> RequestContextBuilder 再构建真正发送给 LLM 的 messages
   -> LLMClient.generate(messages, tools)
   -> Agent 追加 assistant 消息
@@ -171,6 +173,18 @@ LLM 实际收到的不是一个拼好的字符串，而是：
 8. recent messages：最近用户消息、assistant 回复和 tool 结果
 9. active tool chain：当前未完成的工具链强保护
 
+每轮 LLM 请求前，`CompressionPipeline` 会先估算请求消息、system prompt 层和 tool schema 的 token 占用。低于 `token_limit` 的 85% 时不压缩；超过后按固定顺序执行：
+
+```text
+Tool Result Budget -> Snip -> Micro-Compact -> Context Collapse -> Auto-Compact fallback
+```
+
+- `Tool Result Budget`：单个过大工具结果或同一轮超过 200KB 的工具结果会写入 `.mini_agent/tool-results/`，prompt 中只保留路径、`tool_call_id` 和 `read_file(path, offset, limit)` 读取提示。
+- `Snip`：直接移除最老的可移除消息块，不做摘要，只插入 `context_snip_boundary` system marker。
+- `Micro-Compact`：只裁剪可重新获取的旧工具结果，例如 `read_file`、`bash`、`bash_output`、`write_file`、`edit_file`、`recall_notes`、`get_skill`。被裁剪的结果会标记为 `Old tool result content shortened`，提醒模型旧内容已从 prompt 中移除。
+- `Context Collapse`：读时投影，不修改真实 `messages`，只在本次 API 请求视图里把旧消息段替换成 `context_collapse_boundary` system marker。90% 上下文窗口开始折叠，95% 进入更激进的紧急折叠。
+- `Auto-Compact fallback`：前四层后重新测量仍超过 `token_limit` 时，才调用 `MessageSummarizer` 对可压缩历史做一次全量摘要，生成 `[Harness Execution Summary]`；当前用户请求和活跃工具链保持原文。
+
 ## Token 与成本显示
 
 每次 LLM 调用返回后，终端会显示本轮 API reported token：
@@ -188,7 +202,7 @@ uncached_input = prompt_tokens - cached_tokens - cache_write_tokens
 
 然后分别估算 `input`、`output`、`cache_read`、`cache_write` 成本。价格由模型服务商决定，建议面试或演示前按实际模型价格填写，不要把它写死在代码里。
 
-每轮请求前会先估算 system prompt、tool schema 和历史消息占用。旧执行过程过长时，会把 assistant/tool 轨迹压成带有 `[Harness Execution Summary]` 标记的 system message，再由 `SystemPromptBuilder` 注入 `Harness Summary` 层。
+每轮请求前会先估算 system prompt、tool schema 和历史消息占用。旧执行过程过长且确定性压缩仍不足时，会把 assistant/tool 轨迹压成带有 `[Harness Execution Summary]` 标记的 system message，再由 `SystemPromptBuilder` 注入 `Harness Summary` 层。
 
 ## 工具边界
 
@@ -323,3 +337,15 @@ uv run python -m py_compile mini_agent/agent.py mini_agent/cli.py mini_agent/con
 - `mini_agent/runtime.py`：ToolRuntime、policy、observer
 - `mini_agent/tool_registry.py`：工具注册与可选扩展加载
 - `mini_agent/config.py`：配置模型和 YAML 解析
+
+
+LLM request:
+  messages:
+    - system: [core + boundary + dynamic layers]
+    - user/assistant/tool: [最近历史 + 当前请求 + 工具结果]
+  tools:
+    - tool schemas
+  params:
+    - model
+    - cache settings
+    - reasoning/thinking settings

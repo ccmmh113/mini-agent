@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,6 +12,7 @@ from typing import Any
 from .context_budget import PromptLayerBudgets, clip_text_to_token_budget, count_text_tokens
 
 PROJECT_RULE_FILES = ("CLAUDE.md", "AGENTS.md")
+SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"
 
 
 @dataclass(frozen=True)
@@ -24,8 +26,19 @@ class PromptSections:
     dynamic_context: str = ""
 
     def render(self) -> str:
+        static_prompt = self.render_static()
+        dynamic_prompt = self.render_dynamic()
+        if not dynamic_prompt:
+            return static_prompt
+        if not static_prompt:
+            return dynamic_prompt
+        return f"{static_prompt}\n\n{SYSTEM_PROMPT_DYNAMIC_BOUNDARY}\n\n{dynamic_prompt}"
+
+    def render_static(self) -> str:
+        return self.core.strip()
+
+    def render_dynamic(self) -> str:
         parts = [
-            self.core.strip(),
             self.skills.strip(),
             self.memory.strip(),
             self.project_rules.strip(),
@@ -34,6 +47,9 @@ class PromptSections:
             self.dynamic_context.strip(),
         ]
         return "\n\n".join(part for part in parts if part)
+
+    def static_cache_fingerprint(self) -> str:
+        return hashlib.sha256(self.render_static().encode("utf-8")).hexdigest()
 
 
 class SystemPromptBuilder:
@@ -90,19 +106,24 @@ class SystemPromptBuilder:
         )
 
     def _build_memory(self) -> str:
-        from .memory.markdown_store import MarkdownMemoryStore
+        from .memory.markdown_store import MarkdownMemoryStore, format_memory_index_lines
 
         memories = MarkdownMemoryStore(self.workspace_dir / ".memory").search(limit=self.max_memories)
         if not memories:
             return ""
 
         lines = [
-            "## Long-Term Memory",
+            "## Long-Term Memory Index",
             "",
-            "Durable cross-session memory. Treat it as user/project guidance, not as current task state.",
+            "Index only. Use `recall_notes` to read matching memory topic files before using details.",
+            "Long-term memory may be stale. Treat it as a retrieval hint, not proof.",
+            (
+                "Verify remembered files, commands, APIs, dependencies, and behavior against the current "
+                "workspace with tools before relying on them."
+            ),
+            "",
         ]
-        for memory in memories:
-            lines.append(f"- [{memory.type}] {memory.name}: {memory.content}")
+        lines.extend(format_memory_index_lines(memories))
         return "\n".join(lines)
 
     def _build_harness_summary(self) -> str:

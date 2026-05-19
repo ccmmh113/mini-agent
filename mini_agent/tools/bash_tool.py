@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from .base import Tool, ToolResult
-from .security import BashSecurityPolicy, check_command_security, requires_bash_confirmation, write_bash_audit_event
+from .security import BashSecurityPolicy, write_bash_audit_event
 
 COMPLETED_SHELL_RETENTION_SECONDS = 300
 MAX_COMPLETED_SHELLS = 20
@@ -394,51 +394,7 @@ Examples:
                 timeout = 600
             elif timeout < 1:
                 timeout = 120
-
-            security_decision = check_command_security(command, self.workspace_dir, self.security_policy)
-            if not security_decision.allowed:
-                error_msg = f"Command blocked by security policy: {security_decision.reason}"
-                write_bash_audit_event(
-                    {
-                        "tool": self.name,
-                        "command": command,
-                        "run_in_background": run_in_background,
-                        "decision": "blocked",
-                        "risk_level": security_decision.risk_level,
-                        "matched_rules": security_decision.matched_rules,
-                        "reason": security_decision.reason,
-                    },
-                    self.workspace_dir,
-                    self.security_policy,
-                )
-                return BashOutputResult(
-                    success=False,
-                    error=error_msg,
-                    stdout="",
-                    stderr=error_msg,
-                    exit_code=-1,
-                )
-
-            confirmation_decision = requires_bash_confirmation(command, run_in_background)
-            if confirmation_decision.requires_confirmation:
-                security_decision.risk_level = confirmation_decision.risk_level
-                security_decision.matched_rules.extend(confirmation_decision.matched_rules)
-                security_decision.requires_confirmation = True
-
-            write_bash_audit_event(
-                {
-                    "tool": self.name,
-                    "command": command,
-                    "run_in_background": run_in_background,
-                    "decision": "allowed",
-                    "risk_level": security_decision.risk_level,
-                    "matched_rules": security_decision.matched_rules,
-                    "reason": security_decision.reason,
-                    "requires_confirmation": security_decision.requires_confirmation,
-                },
-                self.workspace_dir,
-                self.security_policy,
-            )
+            risk_level = "low"
 
             # Prepare shell-specific command execution
             if self.is_windows:
@@ -486,7 +442,7 @@ Examples:
                         "run_in_background": True,
                         "decision": "started",
                         "bash_id": bash_id,
-                        "risk_level": security_decision.risk_level,
+                        "risk_level": risk_level,
                     },
                     self.workspace_dir,
                     self.security_policy,
@@ -531,7 +487,7 @@ Examples:
                             "decision": "timeout",
                             "timeout": timeout,
                             "exit_code": -1,
-                            "risk_level": security_decision.risk_level,
+                            "risk_level": risk_level,
                         },
                         self.workspace_dir,
                         self.security_policy,
@@ -564,7 +520,7 @@ Examples:
                         "decision": "completed",
                         "success": is_success,
                         "exit_code": process.returncode or 0,
-                        "risk_level": security_decision.risk_level,
+                        "risk_level": risk_level,
                     },
                     self.workspace_dir,
                     self.security_policy,

@@ -5,7 +5,12 @@ from pathlib import Path
 from .context_budget import PromptLayerBudgets, estimate_message_tokens, estimate_messages_tokens, estimate_tool_tokens
 from .prompt_builder import SystemPromptBuilder
 from .schema import Message
-from .summarizer import is_harness_summary_message, strip_harness_summary_header
+from .summarizer import (
+    is_context_collapse_message,
+    is_context_snip_message,
+    is_harness_summary_message,
+    strip_harness_summary_header,
+)
 
 
 class RequestContextBuilder:
@@ -51,6 +56,7 @@ class RequestContextBuilder:
         return [system_message, *selected]
 
     def _select_messages(self, messages: list[Message], history_budget: int | None = None) -> list[Message]:
+        projection_boundaries = self._latest_projection_boundaries(messages)
         non_system = [
             self._sanitize_message(message)
             for message in messages
@@ -58,21 +64,22 @@ class RequestContextBuilder:
         ]
         if len(non_system) <= self.max_recent_messages:
             if history_budget is None or estimate_messages_tokens(non_system) <= history_budget:
-                return non_system
+                return self._with_projection_boundaries(projection_boundaries, non_system)
 
         tool_chain_start = self._find_active_tool_chain_start(non_system)
         protected_start = tool_chain_start if tool_chain_start is not None else self._find_latest_user_start(non_system)
         protected = non_system[protected_start:] if protected_start is not None else []
 
         if history_budget is not None:
-            return self._select_by_token_budget(non_system, protected_start, protected, history_budget)
+            selected = self._select_by_token_budget(non_system, protected_start, protected, history_budget)
+            return self._with_projection_boundaries(projection_boundaries, selected)
 
         if tool_chain_start is not None:
             recent_start = max(0, len(non_system) - self.max_recent_messages)
             start = min(tool_chain_start, recent_start)
-            return non_system[start:]
+            return self._with_projection_boundaries(projection_boundaries, non_system[start:])
 
-        return non_system[-self.max_recent_messages :]
+        return self._with_projection_boundaries(projection_boundaries, non_system[-self.max_recent_messages :])
 
     def _find_active_tool_chain_start(self, messages: list[Message]) -> int | None:
         tool_call_index: int | None = None
@@ -101,6 +108,29 @@ class RequestContextBuilder:
                 continue
             summaries.append(strip_harness_summary_header(message.content))
         return summaries
+
+    def _latest_projection_boundaries(self, messages: list[Message]) -> list[Message]:
+        snip_boundary: Message | None = None
+        collapse_boundary: Message | None = None
+        for message in messages:
+            if is_context_snip_message(message):
+                snip_boundary = self._sanitize_message(message)
+            elif is_context_collapse_message(message):
+                collapse_boundary = self._sanitize_message(message)
+        return [boundary for boundary in (snip_boundary, collapse_boundary) if boundary is not None]
+
+    def _with_projection_boundaries(self, boundaries: list[Message], selected: list[Message]) -> list[Message]:
+        if not boundaries:
+            return selected
+        missing = [
+            boundary
+            for boundary in boundaries
+            if not any(
+                selected_message.name == boundary.name or selected_message.content == boundary.content
+                for selected_message in selected
+            )
+        ]
+        return [*missing, *selected]
 
     def _history_budget(self, token_budget: int | None, system_message: Message, tools: list[object] | None) -> int | None:
         if token_budget is None:

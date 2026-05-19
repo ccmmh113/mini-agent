@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1900" viewBox="0 0 1400 1900">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#3f3f46"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 42px "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif; fill: #111827; }
+      .subtitle { font: 400 20px "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif; fill: #64748b; }
+      .box { fill: #ffffff; stroke: #8b7fd3; stroke-width: 2.2; rx: 10; }
+      .box-strong { fill: #eef2ff; stroke: #6d5bd0; stroke-width: 2.4; rx: 10; }
+      .decision { fill: #f1efff; stroke: #8b7fd3; stroke-width: 2.2; }
+      .small { fill: #ffffff; stroke: #c4b5fd; stroke-width: 1.8; rx: 8; }
+      .artifact { fill: #ecfeff; stroke: #0891b2; stroke-width: 2; rx: 10; }
+      .text { font: 500 22px "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif; fill: #1f2937; }
+      .text-small { font: 400 17px "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif; fill: #475569; }
+      .label { font: 500 18px "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif; fill: #52525b; }
+      .edge { stroke: #3f3f46; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
+      .edge-light { stroke: #71717a; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1400" height="1900"/>
+  <text class="title" x="700" y="76" text-anchor="middle">Mini Agent 项目整体执行流程</text>
+  <text class="subtitle" x="700" y="114" text-anchor="middle">模型调用、工具执行、上下文治理、记忆与 checkpoint 的可审计闭环</text>
+
+  <rect class="box-strong" x="520" y="165" width="360" height="82"/>
+  <text class="text" x="700" y="214" text-anchor="middle">用户输入任务</text>
+
+  <path class="edge" d="M700 247 L700 295"/>
+  <rect class="box-strong" x="480" y="295" width="440" height="86"/>
+  <text class="text" x="700" y="330" text-anchor="middle">Agent Harness 接收请求</text>
+  <text class="text-small" x="700" y="359" text-anchor="middle">统一调度模型、工具、状态与运行工件</text>
+
+  <path class="edge" d="M700 381 L700 430"/>
+  <rect class="box" x="470" y="430" width="460" height="92"/>
+  <text class="text" x="700" y="467" text-anchor="middle">加载运行上下文</text>
+  <text class="text-small" x="700" y="497" text-anchor="middle">规则、历史、记忆、checkpoint 进入请求构建</text>
+
+  <path class="edge-light" d="M470 476 L250 476"/>
+  <rect class="small" x="80" y="390" width="270" height="55"/>
+  <text class="text-small" x="215" y="424" text-anchor="middle">系统提示词 / 项目规则</text>
+  <rect class="small" x="80" y="460" width="270" height="55"/>
+  <text class="text-small" x="215" y="494" text-anchor="middle">会话历史</text>
+  <rect class="small" x="80" y="530" width="270" height="55"/>
+  <text class="text-small" x="215" y="564" text-anchor="middle">结构化记忆召回</text>
+  <rect class="small" x="80" y="600" width="270" height="55"/>
+  <text class="text-small" x="215" y="634" text-anchor="middle">Checkpoint 状态</text>
+
+  <path class="edge" d="M700 522 L700 578"/>
+  <rect class="box" x="470" y="578" width="460" height="82"/>
+  <text class="text" x="700" y="627" text-anchor="middle">构建模型请求上下文</text>
+
+  <path class="edge" d="M700 660 L700 715"/>
+  <polygon class="decision" points="700,715 855,855 700,995 545,855"/>
+  <text class="text" x="700" y="847" text-anchor="middle">上下文是否接近</text>
+  <text class="text" x="700" y="879" text-anchor="middle">预算上限？</text>
+
+  <path class="edge" d="M855 855 L1040 855 L1040 1140"/>
+  <text class="label" x="945" y="834" text-anchor="middle">否</text>
+
+  <path class="edge" d="M700 995 L700 1045"/>
+  <text class="label" x="738" y="1022">是</text>
+  <rect class="box-strong" x="435" y="1045" width="530" height="72"/>
+  <text class="text" x="700" y="1090" text-anchor="middle">分层上下文治理</text>
+
+  <path class="edge" d="M700 1117 L700 1162"/>
+  <rect class="small" x="440" y="1162" width="520" height="62"/>
+  <text class="text-small" x="700" y="1187" text-anchor="middle">第1层 Tool Result Budget</text>
+  <text class="text-small" x="700" y="1214" text-anchor="middle">大工具结果落盘，只保留索引</text>
+
+  <path class="edge" d="M700 1224 L700 1262"/>
+  <rect class="small" x="440" y="1262" width="520" height="62"/>
+  <text class="text-small" x="700" y="1287" text-anchor="middle">第2层 Snip</text>
+  <text class="text-small" x="700" y="1314" text-anchor="middle">删除过期早期消息，插入边界标记</text>
+
+  <path class="edge" d="M700 1324 L700 1362"/>
+  <rect class="small" x="440" y="1362" width="520" height="62"/>
+  <text class="text-small" x="700" y="1387" text-anchor="middle">第3层 Micro-Compact</text>
+  <text class="text-small" x="700" y="1414" text-anchor="middle">裁剪可重新获取的旧工具结果</text>
+
+  <path class="edge" d="M700 1424 L700 1462"/>
+  <rect class="small" x="440" y="1462" width="520" height="62"/>
+  <text class="text-small" x="700" y="1487" text-anchor="middle">第4层 Context Collapse</text>
+  <text class="text-small" x="700" y="1514" text-anchor="middle">读时投影，不修改原始历史</text>
+
+  <path class="edge" d="M700 1524 L700 1572"/>
+  <polygon class="decision" points="700,1572 810,1662 700,1752 590,1662"/>
+  <text class="text" x="700" y="1655" text-anchor="middle">仍然</text>
+  <text class="text" x="700" y="1686" text-anchor="middle">超预算？</text>
+
+  <path class="edge" d="M590 1662 L355 1662 L355 1140 L1040 1140"/>
+  <text class="label" x="515" y="1642" text-anchor="middle">否</text>
+
+  <path class="edge" d="M810 1662 L1040 1662 L1040 1212"/>
+  <text class="label" x="878" y="1642" text-anchor="middle">是</text>
+  <rect class="small" x="1030" y="1512" width="300" height="70"/>
+  <text class="text-small" x="1180" y="1540" text-anchor="middle">第5层 Full Auto-Compact</text>
+  <text class="text-small" x="1180" y="1568" text-anchor="middle">全量历史摘要兜底</text>
+  <path class="edge-light" d="M1030 1547 L965 1547"/>
+
+  <rect class="box-strong" x="880" y="1140" width="320" height="78"/>
+  <text class="text" x="1040" y="1188" text-anchor="middle">调用模型 API</text>
+
+  <path class="edge" d="M1040 1218 L1040 1275"/>
+  <rect class="box" x="880" y="1275" width="320" height="78"/>
+  <text class="text" x="1040" y="1323" text-anchor="middle">模型输出决策</text>
+
+  <path class="edge" d="M1040 1353 L1040 1408"/>
+  <polygon class="decision" points="1040,1408 1165,1512 1040,1616 915,1512"/>
+  <text class="text" x="1040" y="1505" text-anchor="middle">是否需要</text>
+  <text class="text" x="1040" y="1536" text-anchor="middle">调用工具？</text>
+
+  <path class="edge" d="M915 1512 L760 1512"/>
+  <text class="label" x="835" y="1492" text-anchor="middle">是</text>
+  <rect class="box" x="95" y="1382" width="300" height="72"/>
+  <text class="text" x="245" y="1427" text-anchor="middle">工具执行层</text>
+  <path class="edge-light" d="M760 1512 L395 1420"/>
+
+  <rect class="small" x="60" y="1484" width="220" height="52"/>
+  <text class="text-small" x="170" y="1517" text-anchor="middle">文件读写</text>
+  <rect class="small" x="310" y="1484" width="220" height="52"/>
+  <text class="text-small" x="420" y="1517" text-anchor="middle">Shell 命令</text>
+  <rect class="small" x="60" y="1554" width="220" height="52"/>
+  <text class="text-small" x="170" y="1587" text-anchor="middle">搜索 / 记忆 / 技能</text>
+  <rect class="small" x="310" y="1554" width="220" height="52"/>
+  <text class="text-small" x="420" y="1587" text-anchor="middle">安全校验 / 脱敏</text>
+
+  <path class="edge" d="M245 1454 L245 1654"/>
+  <rect class="box" x="95" y="1654" width="300" height="70"/>
+  <text class="text-small" x="245" y="1682" text-anchor="middle">工具结果写入会话历史</text>
+  <text class="text-small" x="245" y="1710" text-anchor="middle">返回请求构建继续循环</text>
+  <path class="edge" d="M245 1654 L245 617 L470 617"/>
+
+  <path class="edge" d="M1165 1512 L1275 1512 L1275 1660"/>
+  <text class="label" x="1215" y="1492" text-anchor="middle">否</text>
+  <rect class="box-strong" x="1115" y="1660" width="320" height="76"/>
+  <text class="text" x="1275" y="1707" text-anchor="middle">生成最终回答</text>
+
+  <path class="edge" d="M1275 1736 L1275 1800"/>
+  <rect class="artifact" x="1075" y="1800" width="400" height="74"/>
+  <text class="text" x="1275" y="1829" text-anchor="middle">运行工件落盘</text>
+  <text class="text-small" x="1275" y="1858" text-anchor="middle">Checkpoint / 工具结果 / Benchmark 报告</text>
+</svg>

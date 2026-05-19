@@ -273,6 +273,8 @@ class TaskMemoryHook:
 
     def record_tool_result(self, tool_name: str, arguments: dict[str, Any], result: ToolResult) -> None:
         status = "succeeded" if result.success else "failed"
+        metadata = getattr(result, "metadata", {})
+        affected_paths = metadata.get("affected_paths") if isinstance(metadata, dict) else None
         self.store.append_step(
             description=f"Tool {tool_name} {status}",
             source="auto",
@@ -296,6 +298,7 @@ class TaskMemoryHook:
                     "tool": tool_name,
                     "success": result.success,
                     "verification": metadata,
+                    "affected_paths": affected_paths or [],
                     "source": "auto",
                 }
             )
@@ -309,6 +312,7 @@ class TaskMemoryHook:
                     "description": f"bash {status}",
                     "tool": tool_name,
                     "success": result.success,
+                    "affected_paths": affected_paths or [],
                     "source": "auto",
                 }
             )

@@ -13,7 +13,7 @@ from .llm import LLMClient
 from .request_context import RequestContextBuilder
 from .runtime import RunContext, ToolRuntime
 from .schema import Message, TokenCost, TokenPricing
-from .summarizer import MessageSummarizer
+from .summarizer import CompressionPipeline, ContextCollapser, MessageCompactor, MessageSummarizer
 from .token_accounting import estimate_token_cost
 from .tools.base import Tool
 from .tools.security import CommandSecurityDecision
@@ -86,6 +86,14 @@ class Agent:
             max_recent_messages=request_context_limit,
             token_budget=self.token_limit,
             layer_budgets=context_layer_budgets,
+        )
+        self.compression_pipeline = CompressionPipeline(
+            compactor=MessageCompactor(token_limit=self.token_limit, workspace_dir=self.workspace_dir),
+            context_collapser=ContextCollapser(token_limit=self.token_limit),
+            summarizer=self.message_summarizer,
+            request_context_builder=self.request_context_builder,
+            token_limit=self.token_limit,
+            renderer=self.renderer,
         )
 
         # Initialize message history
@@ -230,17 +238,9 @@ class Agent:
             # Get tool list for LLM call
             tool_list = list(self.tools.values())
 
-            # Check and summarize message history to prevent context overflow.
-            # Use the fresh request context and tool schemas for a closer budget estimate.
-            budget_messages = self.request_context_builder.build(
-                self.messages,
-                tools=tool_list,
-                token_budget=self.token_limit,
-            )
-            self.messages = await self.message_summarizer.summarize_if_needed(
-                self.messages,
-                self.api_total_tokens,
-                budget_messages=budget_messages,
+            self.messages = await self.compression_pipeline.compress_before_request(
+                messages=self.messages,
+                api_total_tokens=self.api_total_tokens,
                 tools=tool_list,
             )
 

@@ -5,10 +5,11 @@
 Mini Agent will refactor context compression into a staged pipeline that runs before each LLM API call. The first implementation keeps `compact` and `summarize` in `mini_agent/summarizer.py`, but separates them into different classes:
 
 - `MessageCompactor`: deterministic compression that does not call an LLM.
+- `ContextCollapser`: read-time projection that compresses the API request view without mutating durable history.
 - `MessageSummarizer`: existing LLM-based semantic summary fallback.
-- `CompressionPipeline`: orchestration layer that runs compact steps first, then invokes summarization only if the request still exceeds budget.
+- `CompressionPipeline`: orchestration layer that runs compact steps and context collapse first, then invokes summarization only if the request still exceeds budget.
 
-The first version implements the first three layers from the proposed diagram: Tool Result Budget, Snip, and Micro-Compact. Context Collapse is left as an explicit future extension point. Auto-Compact continues to use the existing `MessageSummarizer`.
+The implementation covers Tool Result Budget, Snip, Micro-Compact, Context Collapse, and Auto-Compact fallback. Auto-Compact continues to use the existing `MessageSummarizer`.
 
 ## Goals
 
@@ -20,7 +21,6 @@ The first version implements the first three layers from the proposed diagram: T
 
 ## Non-Goals
 
-- Do not implement Context Collapse read-time projection in the first version.
 - Do not change checkpoint file format.
 - Do not add embeddings, vector search, or background compression.
 - Do not remove the existing `MessageSummarizer` fallback.
@@ -82,14 +82,18 @@ run MessageCompactor:
 
 measure request again
 if still over limit after deterministic compaction:
+  layer 4: Context Collapse read-time projection
+
+measure projected request again
+if still over limit after projection:
   call MessageSummarizer
 
-return compacted messages
+return compacted or projected messages
 ```
 
 `Agent.run()` should call this pipeline before building the final request for `llm.generate(...)`.
 
-The pipeline must base the Auto-Compact decision on the post-compaction request estimate, not the original pre-snip estimate. `snip_tokens_freed` is recorded for logging and tests, but the trigger condition is the current compacted context size.
+The pipeline must base the Auto-Compact decision on the post-compaction and post-collapse request estimate, not the original pre-snip estimate. `snip_tokens_freed` is recorded for logging and tests, but the trigger condition is the current compacted or projected context size.
 
 ## Layer Design
 
@@ -233,14 +237,45 @@ These constants should live on `MessageCompactor` so tests can override them wit
 Micro-Compact marker:
 
 ```text
-[Tool result micro-compacted: tool=<name>, original_tokens=<N>, retained_tokens=<M>. Re-run or re-read only if safe and needed.]
+[Old tool result content shortened: tool=<name>, original_tokens=<N>, retained_tokens=<M>. Earlier content was removed from this prompt. Re-run or re-read only if safe and needed.]
 ```
 
 ### Layer 4: Context Collapse
 
-Not implemented in the first version.
+Purpose: reduce the API request view without mutating the agent's durable `messages`.
 
-The code should reserve a named method or comment-level extension point for future read-time projection. It should not change runtime behavior.
+Behavior:
+
+- Run after Tool Result Budget, Snip, and Micro-Compact, before Auto-Compact.
+- Do not modify the original message list.
+- Return a projected message list used only for the current API request.
+- Replace old removable message segments with a named system marker:
+
+```text
+[Context Collapsed: <N> older messages hidden for this API call only, approximately <M> tokens removed, mode=<normal|emergency>. Original history is preserved in agent memory.]
+```
+
+- Include a few deterministic anchors from the collapsed segment, such as user prompt previews, assistant previews, tool names, and tool call ids.
+- Preserve:
+  - initial system message
+  - harness summary messages
+  - snip boundary messages
+  - latest user turn
+  - active tool-call chain
+  - assistant/tool pairing
+
+Thresholds:
+
+- `collapse_ratio = 0.90`: begin read-time projection when the request reaches 90% of `token_limit`.
+- `emergency_ratio = 0.95`: use more aggressive projection when the request reaches 95% of `token_limit`.
+- Normal collapse targets approximately 85% of `token_limit`.
+- Emergency collapse targets approximately 80% of `token_limit`.
+
+Storage:
+
+- Use a named system message for the projection marker: `CONTEXT_COLLAPSE_MESSAGE_NAME = "context_collapse_boundary"`.
+- Extend request-context assembly so collapse boundary markers are preserved in the final prompt.
+- Collapse markers are not harness summaries and should not be injected into the Harness Summary system prompt layer.
 
 ### Layer 5: Auto-Compact
 
@@ -248,14 +283,16 @@ Purpose: semantic fallback when deterministic compaction is not enough.
 
 Behavior:
 
-- Reuse existing `MessageSummarizer`.
+- Reuse `MessageSummarizer` as the final full-history Auto-Compact fallback.
+- Summarize the whole compressible history in one LLM call instead of summarizing per user turn.
+- Preserve the first system message, latest user request, active tool rounds, and snip/collapse boundary markers.
 - Preserve the existing harness summary message format:
 
 ```text
 [Harness Execution Summary]
 ```
 
-- Preserve active tool rounds exactly as the current summarizer does.
+- If no compressible historical context exists, skip Auto-Compact with an explicit diagnostic instead of claiming a per-turn summary failure.
 
 ## Budget Rules
 
@@ -276,7 +313,8 @@ Auto-Compact trigger rule:
 
 - Run deterministic compaction first when near the limit.
 - Rebuild and remeasure the request after Tool Result Budget, Snip, and Micro-Compact.
-- Invoke `MessageSummarizer` only if the post-compaction request still exceeds `hard_limit_ratio`.
+- If the compacted request still exceeds `hard_limit_ratio`, apply Context Collapse as a read-time projection and remeasure.
+- Invoke `MessageSummarizer` only if the post-collapse request still exceeds `hard_limit_ratio`.
 - Do not invoke `MessageSummarizer` merely because the pre-snip estimate exceeded the limit.
 
 ## Agent Integration
@@ -286,6 +324,7 @@ Auto-Compact trigger rule:
 ```python
 self.compression_pipeline = CompressionPipeline(
     compactor=MessageCompactor(token_limit=self.token_limit),
+    context_collapser=ContextCollapser(token_limit=self.token_limit),
     summarizer=self.message_summarizer,
     request_context_builder=self.request_context_builder,
     token_limit=self.token_limit,
@@ -328,8 +367,12 @@ Required tests:
 - Micro-Compact only clips compactable tool names.
 - Micro-Compact leaves non-compactable tool results unchanged.
 - Micro-Compact leaves active tool-chain results unchanged even when their tool names are compactable.
+- Context Collapse projects old history without mutating the original message list.
+- Context Collapse preserves active tool-chain messages.
+- Context Collapse markers are preserved by request-context assembly.
 - Pipeline does not call `MessageSummarizer` when deterministic compaction brings the request below limit.
 - Pipeline uses the post-snip request estimate when deciding whether Auto-Compact should run.
+- Pipeline uses the post-collapse request estimate before deciding whether Auto-Compact should run.
 - Pipeline calls `MessageSummarizer` when deterministic compaction is insufficient.
 
 Keep existing tests:
@@ -355,7 +398,5 @@ uv run pytest -q
 Update `README_CN.md` and `docs/ARCHITECTURE_AND_DEVELOPMENT_CN.md` after implementation to describe the staged compression flow:
 
 ```text
-Tool Result Budget -> Snip -> Micro-Compact -> Auto-Compact fallback
+Tool Result Budget -> Snip -> Micro-Compact -> Context Collapse -> Auto-Compact fallback
 ```
-
-Context Collapse should be documented as future work, not current behavior.

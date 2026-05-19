@@ -66,6 +66,21 @@ async def test_edit_tool():
 
 
 @pytest.mark.asyncio
+async def test_edit_tool_requires_unique_match():
+    """EditTool should only replace one exact match."""
+    with tempfile.TemporaryDirectory() as workspace:
+        file_path = Path(workspace) / "test.txt"
+        file_path.write_text("same\nsame\n", encoding="utf-8")
+
+        tool = EditTool(workspace_dir=workspace)
+        result = await tool.execute(path="test.txt", old_str="same", new_str="changed")
+
+        assert not result.success
+        assert "exactly once" in (result.error or "")
+        assert file_path.read_text(encoding="utf-8") == "same\nsame\n"
+
+
+@pytest.mark.asyncio
 async def test_file_tools_reject_paths_outside_workspace():
     """File tools should not access paths outside their configured workspace."""
     with tempfile.TemporaryDirectory() as workspace:

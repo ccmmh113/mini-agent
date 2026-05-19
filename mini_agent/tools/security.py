@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..redaction import redact_data
+
 
 @dataclass
 class CommandSecurityDecision:
@@ -324,7 +326,7 @@ def write_bash_audit_event(
 
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        **event,
+        **redact_data(event),
     }
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")

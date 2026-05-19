@@ -8,6 +8,7 @@ import pytest
 from mini_agent.config import AgentConfig, Config, LLMConfig, ToolsConfig
 from mini_agent.runtime import RunContext, ToolExecutionRequest, ToolRuntime
 from mini_agent.tool_registry import ToolRegistry
+from mini_agent.tools import EditTool, ReadTool, WriteTool
 from mini_agent.tools.base import Tool, ToolResult
 from mini_agent.tools.bash_tool import BashTool
 
@@ -133,6 +134,83 @@ async def test_tool_runtime_observer_records_successful_result(tmp_path):
     assert result.success
     assert result.content == "ok sample"
     assert observer.events == [("runtime_dummy", True)]
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_requires_fresh_read_before_editing_existing_file(tmp_path):
+    test_file = tmp_path / "sample.txt"
+    test_file.write_text("status: draft\n", encoding="utf-8")
+    context = RunContext(workspace_dir=tmp_path)
+    runtime = ToolRuntime(
+        {
+            "read_file": ReadTool(workspace_dir=str(tmp_path)),
+            "edit_file": EditTool(workspace_dir=str(tmp_path)),
+        },
+        context,
+    )
+
+    denied = await runtime.execute("edit_file", {"path": "sample.txt", "old_str": "draft", "new_str": "ready"})
+    assert not denied.success
+    assert "Fresh read required" in (denied.error or "")
+    assert test_file.read_text(encoding="utf-8") == "status: draft\n"
+
+    read_result = await runtime.execute("read_file", {"path": "sample.txt"})
+    assert read_result.success
+
+    edit_result = await runtime.execute("edit_file", {"path": "sample.txt", "old_str": "draft", "new_str": "ready"})
+    assert edit_result.success
+    assert test_file.read_text(encoding="utf-8") == "status: ready\n"
+    assert edit_result.metadata["affected_paths"] == ["sample.txt"]
+    assert edit_result.metadata["workspace_diff"]["modified"] == ["sample.txt"]
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_rejects_stale_read_before_editing(tmp_path):
+    test_file = tmp_path / "sample.txt"
+    test_file.write_text("status: draft\n", encoding="utf-8")
+    context = RunContext(workspace_dir=tmp_path)
+    runtime = ToolRuntime(
+        {
+            "read_file": ReadTool(workspace_dir=str(tmp_path)),
+            "edit_file": EditTool(workspace_dir=str(tmp_path)),
+        },
+        context,
+    )
+
+    read_result = await runtime.execute("read_file", {"path": "sample.txt"})
+    assert read_result.success
+
+    test_file.write_text("status: changed\n", encoding="utf-8")
+    edit_result = await runtime.execute("edit_file", {"path": "sample.txt", "old_str": "changed", "new_str": "ready"})
+
+    assert not edit_result.success
+    assert "File changed since last read" in (edit_result.error or "")
+    assert test_file.read_text(encoding="utf-8") == "status: changed\n"
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_records_workspace_diff_for_created_files(tmp_path):
+    context = RunContext(workspace_dir=tmp_path)
+    runtime = ToolRuntime({"write_file": WriteTool(workspace_dir=str(tmp_path))}, context)
+
+    result = await runtime.execute("write_file", {"path": "created.txt", "content": "hello"})
+
+    assert result.success
+    assert result.metadata["affected_paths"] == ["created.txt"]
+    assert result.metadata["workspace_diff"]["created"] == ["created.txt"]
+    assert "[workspace_diff]" in result.content
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_redacts_secret_tool_results(tmp_path):
+    context = RunContext(workspace_dir=tmp_path)
+    runtime = ToolRuntime({"runtime_dummy": RuntimeDummyTool()}, context)
+
+    result = await runtime.execute("runtime_dummy", {"value": "sk-testsecret12345678901234567890"})
+
+    assert result.success
+    assert "sk-testsecret" not in result.content
+    assert "[REDACTED]" in result.content
 
 
 @pytest.mark.asyncio

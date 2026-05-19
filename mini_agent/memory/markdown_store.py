@@ -8,6 +8,11 @@ from typing import Any
 
 
 MEMORY_TYPES = {"user", "feedback", "project", "reference"}
+INDEX_DESCRIPTION_LIMIT = 150
+STALE_MEMORY_WARNING = (
+    "Long-term memory may be stale; verify current workspace facts before relying on remembered files, "
+    "commands, APIs, dependencies, or behavior."
+)
 
 
 def _now() -> str:
@@ -17,6 +22,13 @@ def _now() -> str:
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip().lower()).strip("-")
     return slug[:64] or f"memory-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+
+def _single_line(value: str, max_length: int = INDEX_DESCRIPTION_LIMIT) -> str:
+    text = " ".join(value.strip().split())
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3].rstrip() + "..."
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -88,7 +100,7 @@ class MarkdownMemoryStore:
             memory_type = metadata.get("type", "project")
             if memory_type not in MEMORY_TYPES:
                 memory_type = "project"
-            fallback_description = content.splitlines()[0][:120] if content else path.stem
+            fallback_description = _single_line(content.splitlines()[0], 120) if content else path.stem
             memories.append(
                 MarkdownMemory(
                     name=metadata.get("name") or path.stem,
@@ -126,7 +138,7 @@ class MarkdownMemoryStore:
         timestamp = _now()
         metadata = {
             "name": final_name,
-            "description": (description or content.splitlines()[0])[:160],
+            "description": _single_line(description or content.splitlines()[0]),
             "type": memory_type,
             "created_at": timestamp,
             "updated_at": timestamp,
@@ -159,14 +171,14 @@ class MarkdownMemoryStore:
         lines = [
             "# Memory Index",
             "",
-            "This file is an index only. Each memory lives in its own Markdown file.",
+            "Index only. Detailed memory lives in linked topic files.",
+            "Do not add long-form memory content here.",
             "",
         ]
         if not memories:
             lines.append("No memories recorded yet.")
         else:
-            for memory in memories:
-                lines.append(f"- [{memory.name}]({memory.path.name}) `{memory.type}` - {memory.description}")
+            lines.extend(format_memory_index_lines(memories))
         self.index_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def search(
@@ -199,8 +211,29 @@ class MarkdownMemoryStore:
         return memories[: max(1, limit)]
 
 
+def _format_memory_index_line(memory: MarkdownMemory) -> str:
+    updated = memory.updated_at or memory.created_at or "unknown"
+    description = _single_line(memory.description)
+    return f"- [{memory.name}]({memory.path.name}) `{memory.type}` updated={updated} - {description}"
+
+
+def format_memory_index_lines(memories: list[MarkdownMemory]) -> list[str]:
+    return [_format_memory_index_line(memory) for memory in memories]
+
+
+def format_markdown_memory_index(title: str, memories: list[MarkdownMemory]) -> str:
+    lines = [
+        title,
+        "Index only. Use `recall_notes` with a query to read matching topic files.",
+        STALE_MEMORY_WARNING,
+        "",
+    ]
+    lines.extend(format_memory_index_lines(memories))
+    return "\n".join(lines)
+
+
 def format_markdown_memories(title: str, memories: list[MarkdownMemory]) -> str:
-    lines = [title]
+    lines = [title, STALE_MEMORY_WARNING]
     for index, memory in enumerate(memories, 1):
         lines.append(f"{index}. [{memory.type}] {memory.name} - {memory.description}")
         lines.append(f"   {memory.content}")

@@ -43,17 +43,18 @@ mini-agent 或 mini-agent --task
 
 ```text
 1. 取当前 tools
-2. RequestContextBuilder.build(...) 预估本轮上下文
-3. MessageSummarizer.summarize_if_needed(...) 判断是否压缩旧历史
-4. RequestContextBuilder.build(...) 重新生成真正请求 messages
-5. llm.generate(messages=request_messages, tools=tool_list)
-6. 读取 response.usage，展示本轮 token 和可选成本估算
-7. 追加 assistant message
-8. 如果 assistant 没有 tool_calls，结束任务
-9. 如果有 tool_calls，ToolRuntime.execute(...)
-10. 追加 tool result message
-11. 写 checkpoint / logger / task memory
-12. 进入下一 step
+2. CompressionPipeline.compress_before_request(...) 测量并按需压缩上下文
+3. MessageCompactor 先执行 Tool Result Budget / Snip / Micro-Compact
+4. MessageSummarizer 仅在确定性压缩后仍超限时生成 harness summary
+5. RequestContextBuilder.build(...) 重新生成真正请求 messages
+6. llm.generate(messages=request_messages, tools=tool_list)
+7. 读取 response.usage，展示本轮 token 和可选成本估算
+8. 追加 assistant message
+9. 如果 assistant 没有 tool_calls，结束任务
+10. 如果有 tool_calls，ToolRuntime.execute(...)
+11. 追加 tool result message
+12. 写 checkpoint / logger / task memory
+13. 进入下一 step
 ```
 
 关键文件：
@@ -95,7 +96,7 @@ mini-agent 或 mini-agent --task
 - 保存当前 `messages`
 - 控制最大 step
 - 调用 context builder
-- 调用 summarizer
+- 调用 compression pipeline
 - 调用 LLM
 - 处理 assistant tool calls
 - 追加 tool results
@@ -183,7 +184,7 @@ context_layer_budgets:
 
 ## 6. 压缩策略
 
-压缩分三类：
+压缩分五类，其中 message history 压缩由 `CompressionPipeline` 串联确定性压缩、读时投影和语义摘要 fallback：
 
 ### 6.1 System prompt 分层裁剪
 
@@ -207,9 +208,48 @@ context_layer_budgets:
 
 然后用剩余预算选择历史消息。当前活跃工具链优先级最高，即使超出历史预算也会保留，避免 tool call 与 tool result 断裂。
 
-### 6.3 Harness summary 压缩
+### 6.3 MessageCompactor 确定性压缩
 
-`MessageSummarizer` 在上下文超过 `token_limit` 时，把旧 assistant/tool 执行轨迹压成 system summary：
+`MessageCompactor` 不调用 LLM。它只做可证明不会破坏消息结构的本地转换，顺序如下：
+
+```text
+Tool Result Budget -> Snip -> Micro-Compact -> Context Collapse
+```
+
+`Tool Result Budget` 处理工具结果膨胀：单个过大工具结果会写入 `.mini_agent/tool-results/`；同一轮 assistant `tool_calls` 后连续 tool results 的总大小超过 200KB 时，会从最大的结果开始写入磁盘，直到 prompt 内保留的工具结果总量回到限制以内。消息中保留 `tool_call_id`、工具名、原始字节数、相对路径和 `read_file(path, offset, limit)` 读取提示，完整内容不丢。
+
+`Snip` 是零 API 成本裁剪：直接移除开头的一段旧消息，不总结、不改写，只插入名为 `context_snip_boundary` 的 system marker。`RequestContextBuilder` 会把这个 marker 当作普通历史边界保留，不注入 Harness Summary。
+
+`Micro-Compact` 只裁剪可重新获取或可安全替代的旧工具结果：
+
+```text
+read_file, bash, bash_output, write_file, edit_file, recall_notes, get_skill
+```
+
+它按时间衰减保留内容：越新的工具结果保留越多，越老的保留越少。`record_note`、`task`、`bash_kill` 和未知 MCP 工具默认不裁剪。当前活跃工具链始终原样保留。
+
+被裁剪的工具结果会保留 `Old tool result content shortened` 标记，说明旧内容已经从 prompt 中移除，并提示只在安全且必要时重新读取或重新执行。
+
+### 6.4 Context Collapse 读时投影
+
+`ContextCollapser` 不修改真实 `agent.messages`，只在每次 API 请求前生成一个临时投影视图。它运行在 `MessageCompactor` 之后、`MessageSummarizer` 之前：
+
+```text
+真实 messages 保留完整历史
+request projection 把旧消息段替换成 context_collapse_boundary
+LLM 只看到投影视图
+```
+
+触发阈值分两级：
+
+- 90% `token_limit`：普通折叠，目标是回落到 85% 左右
+- 95% `token_limit`：紧急折叠，目标是回落到 80% 左右
+
+折叠 marker 会说明“只对本次 API call 隐藏旧消息，原始历史仍保留在 agent memory”，并带少量 user、assistant、tool anchor，帮助模型理解被折叠段的轮廓。当前用户请求和活跃工具链始终保留。
+
+### 6.5 Harness summary / Auto-Compact fallback
+
+`CompressionPipeline` 会先运行确定性压缩和 Context Collapse，然后重新测量本轮请求。如果压缩后的请求仍超过 `token_limit`，才调用 `MessageSummarizer` 对可压缩历史做一次全量摘要，压成 system summary：
 
 ```text
 [Harness Execution Summary]
@@ -217,7 +257,7 @@ context_layer_budgets:
 ...
 ```
 
-这些 summary 不再伪装成 user message，而是在下一轮由 `SystemPromptBuilder` 注入 `Harness Summary` 层。
+Auto-Compact 会保留第一条 system message、最新用户请求、活跃工具链以及 snip/collapse 边界 marker；其余可压缩历史会作为整体交给模型总结。生成的 summary 不再伪装成 user message，而是在下一轮由 `SystemPromptBuilder` 注入 `Harness Summary` 层。
 
 ## 7. LLM 边界
 

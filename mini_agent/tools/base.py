@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ToolResult(BaseModel):
@@ -11,6 +11,7 @@ class ToolResult(BaseModel):
     success: bool
     content: str = ""
     error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Tool:
