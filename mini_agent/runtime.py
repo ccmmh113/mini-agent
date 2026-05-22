@@ -6,11 +6,15 @@ import asyncio
 import hashlib
 import traceback
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Awaitable, Callable, Protocol
+from uuid import uuid4
 
 from .checkpoint import CheckpointStore
 from .logger import AgentLogger
+from .observability import NullTraceRecorder, ToolCallRecord, TraceEvent, TraceEventKind, TraceRecorder
 from .redaction import redact_data, redact_tool_result
 from .tools.base import Tool, ToolResult
 from .tools.file_tools import resolve_workspace_path
@@ -49,6 +53,9 @@ class RunContext:
     tool_confirmation_callback: ToolConfirmationCallback | None = None
     cancel_event: asyncio.Event | None = None
     read_snapshots: dict[str, FileFingerprint] = field(default_factory=dict)
+    run_id: str | None = None
+    step_index: int | None = None
+    trace_recorder: TraceRecorder = field(default_factory=NullTraceRecorder)
 
     def __post_init__(self) -> None:
         self.workspace_dir = Path(self.workspace_dir)
@@ -92,6 +99,10 @@ def _fingerprint_file(path: Path) -> FileFingerprint:
         mtime_ns=stat.st_mtime_ns,
         sha256=digest.hexdigest(),
     )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _tool_workspace_dir(request: ToolExecutionRequest) -> Path:
@@ -232,7 +243,12 @@ class BashToolPolicy:
         decision = self._preflight(request)
         if decision and not decision.allowed:
             self._record_blocked(request, decision)
-            return ToolResult(success=False, content="", error=f"Command blocked by security policy: {decision.reason}")
+            return ToolResult(
+                success=False,
+                content="",
+                error=f"Command blocked by security policy: {decision.reason}",
+                metadata={"policy_outcome": "blocked"},
+            )
 
         if decision and decision.requires_confirmation:
             approved = False
@@ -249,6 +265,7 @@ class BashToolPolicy:
                     success=False,
                     content="",
                     error="Command execution denied by user confirmation policy.",
+                    metadata={"policy_outcome": "confirmation_denied"},
                 )
 
         if decision:
@@ -372,9 +389,13 @@ class ToolRuntime:
 
         tool = self.tools.get(tool_name)
         request = ToolExecutionRequest(tool_name=tool_name, arguments=arguments, tool=tool, context=self.context)
+        trace_call_id = self._start_trace(request)
+        trace_started_at = _utc_timestamp()
+        trace_start_time = perf_counter()
         if tool is None:
             result = ToolResult(success=False, content="", error=f"Unknown tool: {tool_name}")
             self._notify_observers(request, result)
+            self._finish_trace(request, result, trace_call_id, trace_started_at, trace_start_time)
             return result
 
         before_snapshot: dict[str, WorkspaceFileState] | None = None
@@ -399,6 +420,7 @@ class ToolRuntime:
 
         result = redact_tool_result(result)
         self._notify_observers(request, result)
+        self._finish_trace(request, result, trace_call_id, trace_started_at, trace_start_time)
         return result
 
     async def _run_policies(self, request: ToolExecutionRequest) -> ToolResult | None:
@@ -411,3 +433,81 @@ class ToolRuntime:
     def _notify_observers(self, request: ToolExecutionRequest, result: ToolResult) -> None:
         for observer in self.observers:
             observer.on_tool_result(request, result)
+
+    def _start_trace(self, request: ToolExecutionRequest) -> str | None:
+        run_id = request.context.run_id
+        if run_id is None:
+            return None
+
+        call_id = f"tool-{uuid4().hex}"
+        self._record_trace_event(
+            request,
+            TraceEventKind.TOOL_STARTED,
+            {"call_id": call_id, "tool_name": request.tool_name, "step_index": request.context.step_index},
+        )
+        return call_id
+
+    def _finish_trace(
+        self,
+        request: ToolExecutionRequest,
+        result: ToolResult,
+        call_id: str | None,
+        started_at: str,
+        start_time: float,
+    ) -> None:
+        run_id = request.context.run_id
+        if run_id is None or call_id is None:
+            return
+
+        policy_outcome = result.metadata.get("policy_outcome")
+        affected_paths = result.metadata.get("affected_paths", [])
+        if not isinstance(affected_paths, list):
+            affected_paths = []
+
+        duration_ms = int((perf_counter() - start_time) * 1000)
+        call = ToolCallRecord(
+            call_id=call_id,
+            run_id=run_id,
+            step_index=request.context.step_index,
+            tool_name=request.tool_name,
+            arguments=redact_data(request.arguments),
+            started_at=started_at,
+            ended_at=_utc_timestamp(),
+            duration_ms=duration_ms,
+            success=result.success,
+            policy_outcome=policy_outcome if isinstance(policy_outcome, str) else None,
+            error=result.error if not result.success else None,
+            result_summary=result.content if result.success else None,
+            affected_paths=affected_paths,
+        )
+        try:
+            request.context.trace_recorder.record_tool_call(call)
+        except Exception:
+            pass
+
+        kind = TraceEventKind.TOOL_COMPLETED if result.success else TraceEventKind.TOOL_FAILED
+        if policy_outcome == "blocked":
+            kind = TraceEventKind.TOOL_BLOCKED
+        self._record_trace_event(request, kind, {"call_id": call_id, "tool_name": request.tool_name})
+
+    def _record_trace_event(
+        self,
+        request: ToolExecutionRequest,
+        kind: TraceEventKind,
+        payload: dict[str, Any],
+    ) -> None:
+        run_id = request.context.run_id
+        if run_id is None:
+            return
+
+        event = TraceEvent(
+            event_id=f"event-{uuid4().hex}",
+            run_id=run_id,
+            kind=kind,
+            created_at=_utc_timestamp(),
+            payload=payload,
+        )
+        try:
+            request.context.trace_recorder.record_event(event)
+        except Exception:
+            pass

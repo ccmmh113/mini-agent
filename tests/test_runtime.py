@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mini_agent.config import AgentConfig, Config, LLMConfig, ToolsConfig
+from mini_agent.observability import TraceEventKind
 from mini_agent.runtime import RunContext, ToolExecutionRequest, ToolRuntime
 from mini_agent.tool_registry import ToolRegistry
 from mini_agent.tools import EditTool, ReadTool, WriteTool
@@ -43,6 +44,27 @@ class RecordingObserver:
 
     def on_tool_result(self, request: ToolExecutionRequest, result: ToolResult) -> None:
         self.events.append((request.tool_name, result.success))
+
+
+class RuntimeTraceRecorder:
+    def __init__(self):
+        self.tool_calls = []
+        self.events = []
+
+    def record_run(self, run):
+        pass
+
+    def record_step(self, step):
+        pass
+
+    def record_llm_call(self, call):
+        pass
+
+    def record_tool_call(self, call):
+        self.tool_calls.append(call)
+
+    def record_event(self, event):
+        self.events.append(event)
 
 
 def _config(**tool_overrides) -> Config:
@@ -199,6 +221,56 @@ async def test_tool_runtime_records_workspace_diff_for_created_files(tmp_path):
     assert result.metadata["affected_paths"] == ["created.txt"]
     assert result.metadata["workspace_diff"]["created"] == ["created.txt"]
     assert "[workspace_diff]" in result.content
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_traces_successful_write_file_calls(tmp_path):
+    recorder = RuntimeTraceRecorder()
+    context = RunContext(workspace_dir=tmp_path, run_id="run-1", step_index=2, trace_recorder=recorder)
+    runtime = ToolRuntime({"write_file": WriteTool(workspace_dir=str(tmp_path))}, context)
+
+    result = await runtime.execute(
+        "write_file",
+        {"path": "created.txt", "content": "sk-testsecret12345678901234567890"},
+    )
+
+    assert result.success
+    assert [event.kind for event in recorder.events] == [
+        TraceEventKind.TOOL_STARTED,
+        TraceEventKind.TOOL_COMPLETED,
+    ]
+    call = recorder.tool_calls[0]
+    assert call.run_id == "run-1"
+    assert call.step_index == 2
+    assert call.tool_name == "write_file"
+    assert call.arguments == {"path": "created.txt", "content": "[REDACTED]"}
+    assert call.started_at
+    assert call.ended_at
+    assert call.duration_ms >= 0
+    assert call.success is True
+    assert call.error is None
+    assert call.result_summary
+    assert call.affected_paths == ["created.txt"]
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_traces_blocked_bash_policy_outcomes(tmp_path):
+    recorder = RuntimeTraceRecorder()
+    context = RunContext(workspace_dir=tmp_path, run_id="run-1", trace_recorder=recorder)
+    runtime = ToolRuntime({"bash": BashTool(workspace_dir=str(tmp_path))}, context)
+
+    result = await runtime.execute("bash", {"command": "rm -rf ./important"})
+
+    assert not result.success
+    assert [event.kind for event in recorder.events] == [
+        TraceEventKind.TOOL_STARTED,
+        TraceEventKind.TOOL_BLOCKED,
+    ]
+    call = recorder.tool_calls[0]
+    assert call.tool_name == "bash"
+    assert call.success is False
+    assert call.policy_outcome == "blocked"
+    assert call.error == result.error
 
 
 @pytest.mark.asyncio
