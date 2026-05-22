@@ -8,6 +8,7 @@ from .events import (
     TraceEventKind,
 )
 from .recorder import NullTraceRecorder, StoreTraceRecorder, TraceRecorder
+from .sqlite_store import SQLiteTraceStore
 from .store import TraceStore
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "NullTraceRecorder",
     "RunRecord",
     "RunStatus",
+    "SQLiteTraceStore",
     "StepRecord",
     "StoreTraceRecorder",
     "ToolCallRecord",
