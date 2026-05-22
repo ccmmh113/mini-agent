@@ -78,6 +78,18 @@ CREATE TABLE IF NOT EXISTS run_events (
     created_at TEXT NOT NULL,
     payload_json TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_steps_run_step
+ON agent_steps (run_id, step_index);
+
+CREATE INDEX IF NOT EXISTS idx_llm_calls_run_step
+ON llm_calls (run_id, step_index);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run_step
+ON tool_calls (run_id, step_index);
+
+CREATE INDEX IF NOT EXISTS idx_run_events_run_id
+ON run_events (run_id);
 """
 
 
@@ -203,7 +215,7 @@ class SQLiteTraceStore:
                     call.duration_ms,
                     call.finish_reason,
                     call.request_message_count,
-                    _json(call.request_tool_names),
+                    _json(call.model_dump(mode="json")["request_tool_names"]),
                     call.error,
                     call.prompt_tokens,
                     call.completion_tokens,
@@ -243,7 +255,7 @@ class SQLiteTraceStore:
                     call.run_id,
                     call.step_index,
                     call.tool_name,
-                    _json(call.arguments),
+                    _json(call.model_dump(mode="json")["arguments"]),
                     call.started_at,
                     call.ended_at,
                     call.duration_ms,
@@ -251,7 +263,7 @@ class SQLiteTraceStore:
                     call.policy_outcome,
                     call.error,
                     call.result_summary,
-                    _json(call.affected_paths),
+                    _json(call.model_dump(mode="json")["affected_paths"]),
                 ),
             )
 
@@ -268,7 +280,7 @@ class SQLiteTraceStore:
                     event.run_id,
                     event.kind.value,
                     event.created_at,
-                    _json(event.payload),
+                    _json(event.model_dump(mode="json")["payload"]),
                 ),
             )
 
