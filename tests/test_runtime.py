@@ -31,6 +31,15 @@ class RuntimeDummyTool(Tool):
         return ToolResult(success=True, content=f"ok {value}")
 
 
+class MalformedMetadataTool(RuntimeDummyTool):
+    @property
+    def name(self) -> str:
+        return "malformed_metadata"
+
+    async def execute(self, value: str) -> ToolResult:
+        return ToolResult(success=True, content=f"ok {value}", metadata={"affected_paths": [123]})
+
+
 class BlockingPolicy:
     async def before_execute(self, request: ToolExecutionRequest) -> ToolResult | None:
         if request.tool_name == "runtime_dummy" and request.arguments.get("value") == "blocked":
@@ -44,6 +53,11 @@ class RecordingObserver:
 
     def on_tool_result(self, request: ToolExecutionRequest, result: ToolResult) -> None:
         self.events.append((request.tool_name, result.success))
+
+
+class RaisingObserver:
+    def on_tool_result(self, request: ToolExecutionRequest, result: ToolResult) -> None:
+        raise RuntimeError("observer failed")
 
 
 class RuntimeTraceRecorder:
@@ -271,6 +285,42 @@ async def test_tool_runtime_traces_blocked_bash_policy_outcomes(tmp_path):
     assert call.success is False
     assert call.policy_outcome == "blocked"
     assert call.error == result.error
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_tracing_ignores_malformed_affected_paths_metadata(tmp_path):
+    recorder = RuntimeTraceRecorder()
+    context = RunContext(workspace_dir=tmp_path, run_id="run-1", trace_recorder=recorder)
+    runtime = ToolRuntime({"malformed_metadata": MalformedMetadataTool()}, context)
+
+    result = await runtime.execute("malformed_metadata", {"value": "sample"})
+
+    assert result.success
+    assert result.content == "ok sample"
+    assert [event.kind for event in recorder.events] == [
+        TraceEventKind.TOOL_STARTED,
+        TraceEventKind.TOOL_COMPLETED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_finalizes_trace_when_observer_raises(tmp_path):
+    recorder = RuntimeTraceRecorder()
+    context = RunContext(workspace_dir=tmp_path, run_id="run-1", trace_recorder=recorder)
+    runtime = ToolRuntime(
+        {"runtime_dummy": RuntimeDummyTool()},
+        context,
+        observers=[RaisingObserver()],
+    )
+
+    with pytest.raises(RuntimeError, match="observer failed"):
+        await runtime.execute("runtime_dummy", {"value": "sample"})
+
+    assert recorder.tool_calls[0].success is True
+    assert [event.kind for event in recorder.events] == [
+        TraceEventKind.TOOL_STARTED,
+        TraceEventKind.TOOL_COMPLETED,
+    ]
 
 
 @pytest.mark.asyncio

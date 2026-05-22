@@ -394,8 +394,10 @@ class ToolRuntime:
         trace_start_time = perf_counter()
         if tool is None:
             result = ToolResult(success=False, content="", error=f"Unknown tool: {tool_name}")
-            self._notify_observers(request, result)
-            self._finish_trace(request, result, trace_call_id, trace_started_at, trace_start_time)
+            try:
+                self._notify_observers(request, result)
+            finally:
+                self._finish_trace(request, result, trace_call_id, trace_started_at, trace_start_time)
             return result
 
         before_snapshot: dict[str, WorkspaceFileState] | None = None
@@ -419,8 +421,10 @@ class ToolRuntime:
                 result = _attach_workspace_diff(result, _workspace_diff(before_snapshot, after_snapshot))
 
         result = redact_tool_result(result)
-        self._notify_observers(request, result)
-        self._finish_trace(request, result, trace_call_id, trace_started_at, trace_start_time)
+        try:
+            self._notify_observers(request, result)
+        finally:
+            self._finish_trace(request, result, trace_call_id, trace_started_at, trace_start_time)
         return result
 
     async def _run_policies(self, request: ToolExecutionRequest) -> ToolResult | None:
@@ -459,28 +463,34 @@ class ToolRuntime:
         if run_id is None or call_id is None:
             return
 
-        policy_outcome = result.metadata.get("policy_outcome")
-        affected_paths = result.metadata.get("affected_paths", [])
-        if not isinstance(affected_paths, list):
+        try:
+            policy_outcome = result.metadata.get("policy_outcome")
+            affected_paths = result.metadata.get("affected_paths", [])
+            if not isinstance(affected_paths, list):
+                affected_paths = []
+            else:
+                affected_paths = [path for path in affected_paths if isinstance(path, str)]
+        except Exception:
+            policy_outcome = None
             affected_paths = []
 
-        duration_ms = int((perf_counter() - start_time) * 1000)
-        call = ToolCallRecord(
-            call_id=call_id,
-            run_id=run_id,
-            step_index=request.context.step_index,
-            tool_name=request.tool_name,
-            arguments=redact_data(request.arguments),
-            started_at=started_at,
-            ended_at=_utc_timestamp(),
-            duration_ms=duration_ms,
-            success=result.success,
-            policy_outcome=policy_outcome if isinstance(policy_outcome, str) else None,
-            error=result.error if not result.success else None,
-            result_summary=result.content if result.success else None,
-            affected_paths=affected_paths,
-        )
         try:
+            duration_ms = int((perf_counter() - start_time) * 1000)
+            call = ToolCallRecord(
+                call_id=call_id,
+                run_id=run_id,
+                step_index=request.context.step_index,
+                tool_name=request.tool_name,
+                arguments=redact_data(request.arguments),
+                started_at=started_at,
+                ended_at=_utc_timestamp(),
+                duration_ms=duration_ms,
+                success=result.success,
+                policy_outcome=policy_outcome if isinstance(policy_outcome, str) else None,
+                error=result.error if not result.success else None,
+                result_summary=result.content if result.success else None,
+                affected_paths=affected_paths,
+            )
             request.context.trace_recorder.record_tool_call(call)
         except Exception:
             pass
@@ -500,14 +510,14 @@ class ToolRuntime:
         if run_id is None:
             return
 
-        event = TraceEvent(
-            event_id=f"event-{uuid4().hex}",
-            run_id=run_id,
-            kind=kind,
-            created_at=_utc_timestamp(),
-            payload=payload,
-        )
         try:
+            event = TraceEvent(
+                event_id=f"event-{uuid4().hex}",
+                run_id=run_id,
+                kind=kind,
+                created_at=_utc_timestamp(),
+                payload=payload,
+            )
             request.context.trace_recorder.record_event(event)
         except Exception:
             pass
