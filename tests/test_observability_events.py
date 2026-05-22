@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from pydantic import ValidationError
 
@@ -11,6 +13,7 @@ from mini_agent.observability import (
     ToolCallRecord,
     TraceEvent,
     TraceEventKind,
+    TraceStore,
 )
 from mini_agent.schema import TokenCost, TokenUsage
 
@@ -18,26 +21,41 @@ from mini_agent.schema import TokenCost, TokenUsage
 class RecordingStore:
     def __init__(self):
         self.runs = []
+        self.steps = []
+        self.llm_calls = []
+        self.tool_calls = []
         self.events = []
 
     def save_run(self, run):
         self.runs.append(run)
 
     def save_step(self, step):
-        raise AssertionError("unused")
+        self.steps.append(step)
 
     def save_llm_call(self, call):
-        raise AssertionError("unused")
+        self.llm_calls.append(call)
 
     def save_tool_call(self, call):
-        raise AssertionError("unused")
+        self.tool_calls.append(call)
 
     def save_event(self, event):
         self.events.append(event)
 
 
-class FailingStore(RecordingStore):
+class FailingStore:
     def save_run(self, run):
+        raise RuntimeError("store write failed")
+
+    def save_step(self, step):
+        raise RuntimeError("store write failed")
+
+    def save_llm_call(self, call):
+        raise RuntimeError("store write failed")
+
+    def save_tool_call(self, call):
+        raise RuntimeError("store write failed")
+
+    def save_event(self, event):
         raise RuntimeError("store write failed")
 
 
@@ -163,37 +181,130 @@ def test_trace_event_round_trips_through_serialized_payload():
     assert TraceEvent.model_validate_json(event.model_dump_json()) == event
 
 
-def test_store_trace_recorder_writes_run_and_event_to_store():
+def test_observability_boundary_exports_trace_store():
+    assert TraceStore.__name__ == "TraceStore"
+
+
+@pytest.mark.parametrize(
+    ("record_method", "store_attr", "record"),
+    [
+        (
+            "record_run",
+            "runs",
+            RunRecord(
+                run_id="run-1",
+                workspace_dir="workspace",
+                started_at="2026-05-22T00:00:00Z",
+            ),
+        ),
+        (
+            "record_step",
+            "steps",
+            StepRecord(
+                step_id="step-1",
+                run_id="run-1",
+                step_index=0,
+                started_at="2026-05-22T00:00:00Z",
+            ),
+        ),
+        (
+            "record_llm_call",
+            "llm_calls",
+            LLMCallRecord(
+                call_id="llm-1",
+                run_id="run-1",
+                step_index=0,
+                started_at="2026-05-22T00:00:01Z",
+            ),
+        ),
+        (
+            "record_tool_call",
+            "tool_calls",
+            ToolCallRecord(
+                call_id="tool-1",
+                run_id="run-1",
+                tool_name="write_file",
+                started_at="2026-05-22T00:00:02Z",
+            ),
+        ),
+        (
+            "record_event",
+            "events",
+            TraceEvent(
+                event_id="event-1",
+                run_id="run-1",
+                kind=TraceEventKind.RUN_STARTED,
+                created_at="2026-05-22T00:00:00Z",
+            ),
+        ),
+    ],
+)
+def test_store_trace_recorder_writes_records_to_store(record_method, store_attr, record):
     store = RecordingStore()
     recorder = StoreTraceRecorder(store)
-    run = RunRecord(
-        run_id="run-1",
-        workspace_dir="workspace",
-        started_at="2026-05-22T00:00:00Z",
-    )
-    event = TraceEvent(
-        event_id="event-1",
-        run_id="run-1",
-        kind=TraceEventKind.RUN_STARTED,
-        created_at="2026-05-22T00:00:00Z",
-    )
 
-    recorder.record_run(run)
-    recorder.record_event(event)
+    getattr(recorder, record_method)(record)
 
-    assert store.runs == [run]
-    assert store.events == [event]
+    assert getattr(store, store_attr) == [record]
 
 
-def test_store_trace_recorder_swallows_store_write_failures():
+@pytest.mark.parametrize(
+    ("record_method", "record"),
+    [
+        (
+            "record_run",
+            RunRecord(
+                run_id="run-1",
+                workspace_dir="workspace",
+                started_at="2026-05-22T00:00:00Z",
+            ),
+        ),
+        (
+            "record_step",
+            StepRecord(
+                step_id="step-1",
+                run_id="run-1",
+                step_index=0,
+                started_at="2026-05-22T00:00:00Z",
+            ),
+        ),
+        (
+            "record_llm_call",
+            LLMCallRecord(
+                call_id="llm-1",
+                run_id="run-1",
+                step_index=0,
+                started_at="2026-05-22T00:00:01Z",
+            ),
+        ),
+        (
+            "record_tool_call",
+            ToolCallRecord(
+                call_id="tool-1",
+                run_id="run-1",
+                tool_name="write_file",
+                started_at="2026-05-22T00:00:02Z",
+            ),
+        ),
+        (
+            "record_event",
+            TraceEvent(
+                event_id="event-1",
+                run_id="run-1",
+                kind=TraceEventKind.RUN_STARTED,
+                created_at="2026-05-22T00:00:00Z",
+            ),
+        ),
+    ],
+)
+def test_store_trace_recorder_logs_and_swallows_store_write_failures(caplog, record_method, record):
     recorder = StoreTraceRecorder(FailingStore())
-    run = RunRecord(
-        run_id="run-1",
-        workspace_dir="workspace",
-        started_at="2026-05-22T00:00:00Z",
-    )
 
-    recorder.record_run(run)
+    with caplog.at_level(logging.WARNING):
+        getattr(recorder, record_method)(record)
+
+    assert "Failed to save trace record" in caplog.text
+    assert record_method in caplog.text
 
 
 def test_null_trace_recorder_accepts_records_without_side_effects():

@@ -1,9 +1,11 @@
+import logging
 from typing import Callable, Protocol, TypeVar
 
 from .events import LLMCallRecord, RunRecord, StepRecord, ToolCallRecord, TraceEvent
 from .store import TraceStore
 
 RecordT = TypeVar("RecordT")
+logger = logging.getLogger(__name__)
 
 
 class TraceRecorder(Protocol):
@@ -45,23 +47,23 @@ class StoreTraceRecorder:
         self._store = store
 
     def record_run(self, run: RunRecord) -> None:
-        self._save(self._store.save_run, run)
+        self._save("record_run", self._store.save_run, run)
 
     def record_step(self, step: StepRecord) -> None:
-        self._save(self._store.save_step, step)
+        self._save("record_step", self._store.save_step, step)
 
     def record_llm_call(self, call: LLMCallRecord) -> None:
-        self._save(self._store.save_llm_call, call)
+        self._save("record_llm_call", self._store.save_llm_call, call)
 
     def record_tool_call(self, call: ToolCallRecord) -> None:
-        self._save(self._store.save_tool_call, call)
+        self._save("record_tool_call", self._store.save_tool_call, call)
 
     def record_event(self, event: TraceEvent) -> None:
-        self._save(self._store.save_event, event)
+        self._save("record_event", self._store.save_event, event)
 
     @staticmethod
-    def _save(save: Callable[[RecordT], None], record: RecordT) -> None:
+    def _save(method_name: str, save: Callable[[RecordT], None], record: RecordT) -> None:
         try:
             save(record)
         except Exception:
-            pass
+            logger.warning("Failed to save trace record in %s", method_name)

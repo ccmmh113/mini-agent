@@ -8,6 +8,7 @@ from .events import (
     TraceEventKind,
 )
 from .recorder import NullTraceRecorder, StoreTraceRecorder, TraceRecorder
+from .store import TraceStore
 
 __all__ = [
     "LLMCallRecord",
@@ -20,4 +21,5 @@ __all__ = [
     "TraceEvent",
     "TraceEventKind",
     "TraceRecorder",
+    "TraceStore",
 ]
