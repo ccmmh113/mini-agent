@@ -3,14 +3,42 @@ from pydantic import ValidationError
 
 from mini_agent.observability import (
     LLMCallRecord,
+    NullTraceRecorder,
     RunRecord,
     RunStatus,
     StepRecord,
+    StoreTraceRecorder,
     ToolCallRecord,
     TraceEvent,
     TraceEventKind,
 )
 from mini_agent.schema import TokenCost, TokenUsage
+
+
+class RecordingStore:
+    def __init__(self):
+        self.runs = []
+        self.events = []
+
+    def save_run(self, run):
+        self.runs.append(run)
+
+    def save_step(self, step):
+        raise AssertionError("unused")
+
+    def save_llm_call(self, call):
+        raise AssertionError("unused")
+
+    def save_tool_call(self, call):
+        raise AssertionError("unused")
+
+    def save_event(self, event):
+        self.events.append(event)
+
+
+class FailingStore(RecordingStore):
+    def save_run(self, run):
+        raise RuntimeError("store write failed")
 
 
 def test_run_record_defaults_to_running_with_zero_totals():
@@ -133,6 +161,78 @@ def test_trace_event_round_trips_through_serialized_payload():
     )
 
     assert TraceEvent.model_validate_json(event.model_dump_json()) == event
+
+
+def test_store_trace_recorder_writes_run_and_event_to_store():
+    store = RecordingStore()
+    recorder = StoreTraceRecorder(store)
+    run = RunRecord(
+        run_id="run-1",
+        workspace_dir="workspace",
+        started_at="2026-05-22T00:00:00Z",
+    )
+    event = TraceEvent(
+        event_id="event-1",
+        run_id="run-1",
+        kind=TraceEventKind.RUN_STARTED,
+        created_at="2026-05-22T00:00:00Z",
+    )
+
+    recorder.record_run(run)
+    recorder.record_event(event)
+
+    assert store.runs == [run]
+    assert store.events == [event]
+
+
+def test_store_trace_recorder_swallows_store_write_failures():
+    recorder = StoreTraceRecorder(FailingStore())
+    run = RunRecord(
+        run_id="run-1",
+        workspace_dir="workspace",
+        started_at="2026-05-22T00:00:00Z",
+    )
+
+    recorder.record_run(run)
+
+
+def test_null_trace_recorder_accepts_records_without_side_effects():
+    recorder = NullTraceRecorder()
+    run = RunRecord(
+        run_id="run-1",
+        workspace_dir="workspace",
+        started_at="2026-05-22T00:00:00Z",
+    )
+    step = StepRecord(
+        step_id="step-1",
+        run_id="run-1",
+        step_index=0,
+        started_at="2026-05-22T00:00:00Z",
+    )
+    llm_call = LLMCallRecord(
+        call_id="llm-1",
+        run_id="run-1",
+        step_index=0,
+        started_at="2026-05-22T00:00:01Z",
+    )
+    tool_call = ToolCallRecord(
+        call_id="tool-1",
+        run_id="run-1",
+        tool_name="write_file",
+        started_at="2026-05-22T00:00:02Z",
+    )
+    event = TraceEvent(
+        event_id="event-1",
+        run_id="run-1",
+        kind=TraceEventKind.RUN_STARTED,
+        created_at="2026-05-22T00:00:00Z",
+    )
+
+    assert recorder.record_run(run) is None
+    assert recorder.record_step(step) is None
+    assert recorder.record_llm_call(llm_call) is None
+    assert recorder.record_tool_call(tool_call) is None
+    assert recorder.record_event(event) is None
 
 
 @pytest.mark.parametrize(

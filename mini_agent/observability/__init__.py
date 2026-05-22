@@ -7,13 +7,17 @@ from .events import (
     TraceEvent,
     TraceEventKind,
 )
+from .recorder import NullTraceRecorder, StoreTraceRecorder, TraceRecorder
 
 __all__ = [
     "LLMCallRecord",
+    "NullTraceRecorder",
     "RunRecord",
     "RunStatus",
     "StepRecord",
+    "StoreTraceRecorder",
     "ToolCallRecord",
     "TraceEvent",
     "TraceEventKind",
+    "TraceRecorder",
 ]
