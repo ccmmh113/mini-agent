@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     suite_metadata_json TEXT NOT NULL,
     suite_tasks_json TEXT NOT NULL,
     candidates_json TEXT NOT NULL,
+    report_metadata_json TEXT NOT NULL DEFAULT '{}',
     case_count INTEGER NOT NULL,
     failed INTEGER NOT NULL,
     pass_rate REAL NOT NULL,
@@ -77,6 +78,7 @@ class EvalSQLiteStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            self._migrate(connection)
 
     def save_report(self, report: EvalRunReport) -> None:
         created_at = datetime.now(timezone.utc).isoformat()
@@ -86,9 +88,9 @@ class EvalSQLiteStore:
                 INSERT INTO eval_runs (
                     eval_run_id, suite_id, suite_name, suite_version,
                     suite_description, suite_metadata_json, suite_tasks_json,
-                    candidates_json, case_count, failed, pass_rate,
+                    candidates_json, report_metadata_json, case_count, failed, pass_rate,
                     total_duration_ms, total_tokens, total_cost, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(eval_run_id) DO UPDATE SET
                     suite_id = excluded.suite_id,
                     suite_name = excluded.suite_name,
@@ -97,6 +99,7 @@ class EvalSQLiteStore:
                     suite_metadata_json = excluded.suite_metadata_json,
                     suite_tasks_json = excluded.suite_tasks_json,
                     candidates_json = excluded.candidates_json,
+                    report_metadata_json = excluded.report_metadata_json,
                     case_count = excluded.case_count,
                     failed = excluded.failed,
                     pass_rate = excluded.pass_rate,
@@ -114,6 +117,7 @@ class EvalSQLiteStore:
                     _json(report.suite.metadata),
                     _json([asdict(task) for task in report.suite.tasks]),
                     _json([asdict(candidate) for candidate in report.candidates]),
+                    _json(report.metadata),
                     report.case_count,
                     report.failed,
                     report.pass_rate,
@@ -218,6 +222,14 @@ class EvalSQLiteStore:
         connection.row_factory = sqlite3.Row
         return connection
 
+    def _migrate(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(eval_runs)").fetchall()
+        }
+        if "report_metadata_json" not in columns:
+            connection.execute("ALTER TABLE eval_runs ADD COLUMN report_metadata_json TEXT NOT NULL DEFAULT '{}'")
+
 
 def _report_from_rows(
     run: sqlite3.Row,
@@ -266,7 +278,13 @@ def _report_from_rows(
         )
         for row in result_rows
     ]
-    return EvalRunReport(eval_run_id=run["eval_run_id"], suite=suite, candidates=candidates, results=results)
+    return EvalRunReport(
+        eval_run_id=run["eval_run_id"],
+        suite=suite,
+        candidates=candidates,
+        results=results,
+        metadata=_loads(run["report_metadata_json"]),
+    )
 
 
 def _json(value: Any) -> str:

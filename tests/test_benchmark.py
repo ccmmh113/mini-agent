@@ -13,6 +13,7 @@ from benchmarks.agent_benchmark import (
     run_real_eval_benchmark,
 )
 from mini_agent.evals import EvalRunReport, EvalSQLiteStore
+from mini_agent.evals import EvalSuite, EvalTask
 
 
 @pytest.mark.asyncio
@@ -211,3 +212,56 @@ async def test_real_eval_benchmark_persists_trace_links_with_default_runner(tmp_
             """
         ).fetchone()[0]
     assert linked_count == 1
+
+
+@pytest.mark.asyncio
+async def test_real_eval_benchmark_uses_custom_suite_and_persists_metrics(tmp_path):
+    gpt_config = tmp_path / "gpt.yaml"
+    _write_candidate_config(gpt_config, provider="openai", model="gpt-4o")
+    candidates = load_real_eval_candidates([f"gpt={gpt_config}"])
+    suite = EvalSuite(
+        suite_id="custom",
+        name="Custom Suite",
+        version="1",
+        tasks=[
+            EvalTask(
+                task_id="custom-task",
+                prompt="Answer custom task",
+                expected_output_contains=["custom ok"],
+            )
+        ],
+    )
+
+    async def fake_runner(case: RealBenchmarkCase, candidate: RealEvalCandidate, output_root, trace_recorder):
+        del candidate, output_root, trace_recorder
+        return {
+            "name": case.name,
+            "description": case.description,
+            "passed": True,
+            "checks": {"output_contains": True, "completed": True},
+            "status": "completed",
+            "agent_run_id": "run-custom",
+            "workspace_files": {},
+            "tool_evidence": [],
+            "elapsed_ms": 123,
+            "llm_calls": 1,
+            "tool_messages": 0,
+            "message_count": 3,
+            "tokens": {"prompt": 11, "completion": 4, "total": 15, "cached": 0, "cache_write": 0},
+            "cost": {"total_cost": 0.02, "currency": "USD"},
+            "output": "custom ok",
+        }
+
+    report = await run_real_eval_benchmark(
+        candidates=candidates,
+        output_root=tmp_path / "outputs",
+        suite=suite,
+        case_runner=fake_runner,
+        db_path=tmp_path / "evals.sqlite3",
+    )
+    loaded = EvalSQLiteStore(tmp_path / "evals.sqlite3").load_report(report.eval_run_id)
+
+    assert report.suite.suite_key == "custom@1"
+    assert report.results[0].task_id == "custom-task"
+    assert report.metadata["metrics"]["latency_ms"]["avg"] == 123
+    assert loaded.metadata["metrics"]["tokens"]["total"] == 15

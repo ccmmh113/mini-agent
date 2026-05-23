@@ -40,6 +40,8 @@ def test_parse_eval_run_real_candidate_command():
             "claude=configs/claude.yaml",
             "--output-root",
             "outputs/evals",
+            "--suite",
+            "eval_suites/smoke.yaml",
         ]
     )
 
@@ -52,6 +54,7 @@ def test_parse_eval_run_real_candidate_command():
         "claude=configs/claude.yaml",
     ]
     assert args.output_root == "outputs/evals"
+    assert args.suite == "eval_suites/smoke.yaml"
 
 
 def test_eval_run_handler_writes_eval_and_trace_tables(tmp_path, capsys):
@@ -78,6 +81,20 @@ def test_eval_run_handler_routes_real_candidates(tmp_path, capsys, monkeypatch):
     import benchmarks.agent_benchmark as agent_benchmark
 
     captured = {}
+    suite_yaml = tmp_path / "suite.yaml"
+    suite_yaml.write_text(
+        """
+suite_id: custom
+name: Custom Suite
+version: v1
+tasks:
+  - task_id: custom-task
+    prompt: Answer custom task
+    expected_output_contains:
+      - ok
+""".strip(),
+        encoding="utf-8",
+    )
     candidate = EvalCandidate(candidate_id="gpt", model="gpt-4o", label="gpt")
     suite = EvalSuite(
         suite_id="mini-agent-real-model",
@@ -107,10 +124,11 @@ def test_eval_run_handler_routes_real_candidates(tmp_path, capsys, monkeypatch):
         captured["specs"] = specs
         return ["loaded-gpt"]
 
-    async def fake_run_real_eval_benchmark(candidates, output_root, db_path):
+    async def fake_run_real_eval_benchmark(candidates, output_root, db_path, suite=None):
         captured["candidates"] = candidates
         captured["output_root"] = output_root
         captured["db_path"] = db_path
+        captured["suite"] = suite
         return report
 
     monkeypatch.setattr(agent_benchmark, "load_real_eval_candidates", fake_load_real_eval_candidates)
@@ -127,6 +145,8 @@ def test_eval_run_handler_routes_real_candidates(tmp_path, capsys, monkeypatch):
             str(db_path),
             "--output-root",
             str(tmp_path / "outputs"),
+            "--suite",
+            str(suite_yaml),
         ]
     )
 
@@ -135,7 +155,17 @@ def test_eval_run_handler_routes_real_candidates(tmp_path, capsys, monkeypatch):
     assert captured["specs"] == ["gpt=configs/gpt.yaml"]
     assert captured["candidates"] == ["loaded-gpt"]
     assert captured["db_path"] == db_path.absolute()
+    assert captured["suite"].suite_key == "custom@v1"
     assert "mini-agent-real-model" in capsys.readouterr().out
+
+
+def test_eval_run_handler_rejects_suite_without_real(tmp_path, capsys):
+    suite_yaml = tmp_path / "suite.yaml"
+    args = parse_args(["eval", "run", "--suite", str(suite_yaml)])
+
+    assert handle_eval_command(args) == 2
+
+    assert "--suite requires --real" in capsys.readouterr().out
 
 
 def test_eval_report_handler_prints_latest_markdown(tmp_path, capsys):

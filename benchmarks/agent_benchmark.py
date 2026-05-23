@@ -31,6 +31,7 @@ from mini_agent.evals import (
     EvalSuite,
     EvalTask,
     run_eval_suite,
+    with_eval_metrics,
 )
 from mini_agent.llm import LLMClient
 from mini_agent.observability import SQLiteTraceStore, StoreTraceRecorder, TraceRecorder
@@ -481,7 +482,7 @@ async def run_eval_benchmark(
             },
         )
 
-    report = await run_eval_suite(eval_run_id, suite, [candidate], run_candidate)
+    report = with_eval_metrics(await run_eval_suite(eval_run_id, suite, [candidate], run_candidate))
     if eval_path is not None:
         EvalSQLiteStore(eval_path).save_report(report)
     return report
@@ -732,6 +733,37 @@ def _real_benchmark_suite(cases: list[RealBenchmarkCase] | None = None) -> EvalS
     )
 
 
+def _expected_files_as_needles(expected_files: dict[str, str | list[str]]) -> dict[str, list[str]]:
+    return {
+        path: [needles] if isinstance(needles, str) else list(needles)
+        for path, needles in expected_files.items()
+    }
+
+
+def _task_max_steps(task: EvalTask, default: int = 8) -> int:
+    raw_value = task.metadata.get("max_steps", default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _real_cases_from_suite(suite: EvalSuite) -> list[RealBenchmarkCase]:
+    return [
+        RealBenchmarkCase(
+            name=task.task_id,
+            description=task.description,
+            task=task.prompt,
+            expect_output_contains=list(task.expected_output_contains),
+            expect_files=_expected_files_as_needles(task.expected_files),
+            expect_tool_messages_contain=list(task.expected_tool_evidence_contains),
+            max_steps=_task_max_steps(task),
+        )
+        for task in suite.tasks
+    ]
+
+
 def _eval_candidate_from_real(candidate: RealEvalCandidate) -> EvalCandidate:
     return EvalCandidate(
         candidate_id=candidate.candidate_id,
@@ -853,11 +885,20 @@ async def run_real_eval_benchmark(
     eval_run_id: str = "mini-agent-real-model",
     db_path: str | Path | None = None,
     cases: list[RealBenchmarkCase] | None = None,
+    suite: EvalSuite | None = None,
     case_runner: RealCaseRunner | None = None,
 ) -> EvalRunReport:
-    selected_cases = cases or default_real_cases()
+    if cases is not None:
+        selected_cases = cases
+    elif suite is not None:
+        selected_cases = _real_cases_from_suite(suite)
+    else:
+        selected_cases = default_real_cases()
     case_by_id = {case.name: case for case in selected_cases}
-    suite = _real_benchmark_suite(selected_cases)
+    eval_suite = suite or _real_benchmark_suite(selected_cases)
+    missing_cases = [task.task_id for task in eval_suite.tasks if task.task_id not in case_by_id]
+    if missing_cases:
+        raise ValueError(f"Eval suite tasks do not have runnable cases: {', '.join(missing_cases)}")
     eval_candidates = [_eval_candidate_from_real(candidate) for candidate in candidates]
     real_by_id = {candidate.candidate_id: candidate for candidate in candidates}
     trace_recorder = StoreTraceRecorder(SQLiteTraceStore(db_path)) if db_path is not None else None
@@ -890,7 +931,7 @@ async def run_real_eval_benchmark(
             },
         )
 
-    report = await run_eval_suite(eval_run_id, suite, eval_candidates, run_candidate)
+    report = with_eval_metrics(await run_eval_suite(eval_run_id, eval_suite, eval_candidates, run_candidate))
     if db_path is not None:
         EvalSQLiteStore(db_path).save_report(report)
     return report
