@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from mini_agent.agent import Agent
 from mini_agent.checkpoint import CheckpointStore
@@ -541,6 +541,46 @@ class RealBenchmarkCase:
     max_steps: int = 8
 
 
+@dataclass(frozen=True)
+class RealEvalCandidate:
+    candidate_id: str
+    config: Config
+    config_path: Path | None = None
+    label: str | None = None
+
+
+RealCaseRunner = Callable[
+    [RealBenchmarkCase, RealEvalCandidate, Path, TraceRecorder | None],
+    Awaitable[dict[str, Any]],
+]
+
+
+def load_real_eval_candidates(candidate_specs: list[str]) -> list[RealEvalCandidate]:
+    """Load named real-model eval candidates from name=config.yaml specs."""
+
+    candidates: list[RealEvalCandidate] = []
+    for spec in candidate_specs:
+        if "=" not in spec:
+            raise ValueError(f"Candidate must use name=path format: {spec}")
+        name, raw_path = spec.split("=", 1)
+        candidate_id = name.strip()
+        config_path = Path(raw_path.strip()).expanduser()
+        if not candidate_id:
+            raise ValueError(f"Candidate name is empty: {spec}")
+        if not config_path.exists():
+            raise FileNotFoundError(f"Candidate config not found: {config_path}")
+        config = Config.from_yaml(config_path)
+        candidates.append(
+            RealEvalCandidate(
+                candidate_id=candidate_id,
+                config=config,
+                config_path=config_path,
+                label=candidate_id,
+            )
+        )
+    return candidates
+
+
 def default_real_cases() -> list[RealBenchmarkCase]:
     return [
         RealBenchmarkCase(
@@ -670,8 +710,49 @@ def _build_real_llm(config: Config) -> LLMClient:
     )
 
 
-async def run_real_case(case: RealBenchmarkCase, config: Config, output_root: Path) -> dict[str, Any]:
-    workspace = output_root / "workspaces" / case.name
+def _real_benchmark_suite(cases: list[RealBenchmarkCase] | None = None) -> EvalSuite:
+    selected_cases = cases or default_real_cases()
+    return EvalSuite(
+        suite_id="mini-agent-real-model",
+        name="Mini Agent Real Model",
+        version="real",
+        tasks=[
+            EvalTask(
+                task_id=case.name,
+                prompt=case.task,
+                description=case.description,
+                expected_output_contains=case.expect_output_contains,
+                expected_files=case.expect_files,
+                expected_tool_evidence_contains=case.expect_tool_messages_contain,
+                expected_status="completed",
+                metadata={"legacy_case": case.name},
+            )
+            for case in selected_cases
+        ],
+    )
+
+
+def _eval_candidate_from_real(candidate: RealEvalCandidate) -> EvalCandidate:
+    return EvalCandidate(
+        candidate_id=candidate.candidate_id,
+        model=candidate.config.llm.model,
+        label=candidate.label or candidate.candidate_id,
+        metadata={
+            "provider": candidate.config.llm.provider,
+            "api_base": candidate.config.llm.api_base,
+            "config_path": str(candidate.config_path) if candidate.config_path is not None else None,
+        },
+    )
+
+
+async def run_real_case(
+    case: RealBenchmarkCase,
+    config: Config,
+    output_root: Path,
+    candidate_id: str = "default",
+    trace_recorder: TraceRecorder | None = None,
+) -> dict[str, Any]:
+    workspace = output_root / "workspaces" / candidate_id / case.name
     workspace.mkdir(parents=True, exist_ok=True)
     _write_fixture_files(workspace, case.files)
 
@@ -696,6 +777,7 @@ async def run_real_case(case: RealBenchmarkCase, config: Config, output_root: Pa
         preserve_thinking=config.llm.preserve_thinking,
         show_thinking=False,
         log_thinking=config.llm.log_thinking,
+        trace_recorder=trace_recorder,
     )
     agent.add_user_message(case.task)
 
@@ -719,12 +801,20 @@ async def run_real_case(case: RealBenchmarkCase, config: Config, output_root: Pa
         ),
         "completed": agent.last_run_completed,
     }
+    status = "completed" if agent.last_run_completed else "failed"
 
     return {
         "name": case.name,
         "description": case.description,
         "passed": all(checks.values()),
         "checks": checks,
+        "status": status,
+        "agent_run_id": agent.run_id,
+        "workspace_files": {
+            path: _read_file_if_exists(workspace, path)
+            for path in case.expect_files
+        },
+        "tool_evidence": tool_messages,
         "elapsed_ms": elapsed_ms,
         "llm_calls": sum(1 for message in agent.messages if message.role == "assistant"),
         "tool_messages": len(tool_messages),
@@ -740,6 +830,70 @@ async def run_real_case(case: RealBenchmarkCase, config: Config, output_root: Pa
         "output": output,
         "workspace": str(workspace),
     }
+
+
+async def _run_real_case_for_candidate(
+    case: RealBenchmarkCase,
+    candidate: RealEvalCandidate,
+    output_root: Path,
+    trace_recorder: TraceRecorder | None,
+) -> dict[str, Any]:
+    return await run_real_case(
+        case,
+        candidate.config,
+        output_root,
+        candidate_id=candidate.candidate_id,
+        trace_recorder=trace_recorder,
+    )
+
+
+async def run_real_eval_benchmark(
+    candidates: list[RealEvalCandidate],
+    output_root: Path,
+    eval_run_id: str = "mini-agent-real-model",
+    db_path: str | Path | None = None,
+    cases: list[RealBenchmarkCase] | None = None,
+    case_runner: RealCaseRunner | None = None,
+) -> EvalRunReport:
+    selected_cases = cases or default_real_cases()
+    case_by_id = {case.name: case for case in selected_cases}
+    suite = _real_benchmark_suite(selected_cases)
+    eval_candidates = [_eval_candidate_from_real(candidate) for candidate in candidates]
+    real_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    trace_recorder = StoreTraceRecorder(SQLiteTraceStore(db_path)) if db_path is not None else None
+    runner = case_runner or _run_real_case_for_candidate
+
+    async def run_candidate(candidate: EvalCandidate, task: EvalTask) -> EvalExecution:
+        result = await runner(case_by_id[task.task_id], real_by_id[candidate.candidate_id], output_root, trace_recorder)
+        tokens = result["tokens"]
+        cost = result.get("cost", {})
+        return EvalExecution(
+            output=result["output"],
+            status=result["status"],
+            agent_run_id=result["agent_run_id"],
+            workspace_files=result["workspace_files"],
+            tool_evidence=result["tool_evidence"],
+            duration_ms=result["elapsed_ms"],
+            prompt_tokens=tokens["prompt"],
+            completion_tokens=tokens["completion"],
+            total_tokens=tokens["total"],
+            total_cost=cost.get("total_cost", 0.0),
+            currency=cost.get("currency", "USD"),
+            metadata={
+                "legacy_checks": result["checks"],
+                "legacy_passed": result["passed"],
+                "description": result["description"],
+                "llm_calls": result["llm_calls"],
+                "tool_messages": result["tool_messages"],
+                "message_count": result["message_count"],
+                "workspace": result.get("workspace"),
+            },
+        )
+
+    report = await run_eval_suite(eval_run_id, suite, eval_candidates, run_candidate)
+    if db_path is not None:
+        EvalSQLiteStore(db_path).save_report(report)
+    return report
 
 
 async def run_real_benchmark(output_root: Path) -> dict[str, Any]:

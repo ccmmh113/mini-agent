@@ -53,12 +53,14 @@ def _score_output_contains(task: EvalTask, execution: EvalExecution) -> tuple[bo
 
 def _score_file_contains(task: EvalTask, execution: EvalExecution) -> tuple[bool, list[str]]:
     reasons: list[str] = []
-    for path, expected_fragment in task.expected_files.items():
+    for path, expected_value in task.expected_files.items():
         if path not in execution.workspace_files:
             reasons.append(f"expected file missing: {path}")
             continue
-        if expected_fragment not in execution.workspace_files[path]:
-            reasons.append(f"file {path} missing fragment: {expected_fragment}")
+        expected_fragments = expected_value if isinstance(expected_value, list) else [expected_value]
+        for expected_fragment in expected_fragments:
+            if expected_fragment not in execution.workspace_files[path]:
+                reasons.append(f"file {path} missing fragment: {expected_fragment}")
     return _pass_or_fail(reasons)
 
 

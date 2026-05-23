@@ -55,6 +55,24 @@ def test_file_contains_scorer_reports_missing_file():
     assert score.failure_reasons == ["expected file missing: result.md"]
 
 
+def test_file_contains_scorer_accepts_multiple_expected_fragments_per_file():
+    task = EvalTask(
+        task_id="write",
+        prompt="Write report",
+        expected_files={"result.md": ["Mini Agent Benchmark", "passed", "real-model"]},
+        scorers=["file_contains"],
+    )
+    execution = EvalExecution(
+        output="done",
+        workspace_files={"result.md": "# Mini Agent Benchmark\n\npassed\n\nreal-model\n"},
+    )
+
+    score = score_task_result(task, execution)
+
+    assert score.passed is True
+    assert score.breakdown["file_contains"] is True
+
+
 def test_tool_evidence_scorer_matches_tool_message_fragments():
     task = EvalTask(
         task_id="tool",
