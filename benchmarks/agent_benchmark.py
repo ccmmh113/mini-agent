@@ -23,7 +23,16 @@ from typing import Any, Callable
 from mini_agent.agent import Agent
 from mini_agent.checkpoint import CheckpointStore
 from mini_agent.config import Config
+from mini_agent.evals import (
+    EvalCandidate,
+    EvalExecution,
+    EvalRunReport,
+    EvalSuite,
+    EvalTask,
+    run_eval_suite,
+)
 from mini_agent.llm import LLMClient
+from mini_agent.observability import SQLiteTraceStore, StoreTraceRecorder, TraceRecorder
 from mini_agent.schema import FunctionCall, LLMResponse, Message, TokenUsage, ToolCall
 from mini_agent.schema import LLMProvider
 from mini_agent.summarizer import is_context_snip_message, is_harness_summary_message
@@ -317,7 +326,38 @@ def _contains_all(text: str, needles: list[str]) -> bool:
     return all(needle in text for needle in needles)
 
 
-async def run_case(case: BenchmarkCase) -> dict[str, Any]:
+def _benchmark_case_expected_status(case: BenchmarkCase) -> str:
+    return "completed" if case.expect_completed else "max_steps"
+
+
+def _benchmark_case_status(case: BenchmarkCase, checks: dict[str, bool]) -> str:
+    if not all(checks.values()):
+        return "failed"
+    return _benchmark_case_expected_status(case)
+
+
+def _benchmark_suite() -> EvalSuite:
+    return EvalSuite(
+        suite_id="mini-agent-harness",
+        name="Mini Agent Harness",
+        version="deterministic",
+        tasks=[
+            EvalTask(
+                task_id=case.name,
+                prompt=case.task,
+                description=case.description,
+                expected_output_contains=case.expect_output_contains,
+                expected_files=case.expect_files,
+                expected_tool_evidence_contains=case.expect_tool_messages_contain,
+                expected_status=_benchmark_case_expected_status(case),
+                metadata={"legacy_case": case.name},
+            )
+            for case in default_cases()
+        ],
+    )
+
+
+async def run_case(case: BenchmarkCase, trace_recorder: TraceRecorder | None = None) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix=f"mini-agent-bench-{case.name}-") as tmp:
         workspace = Path(tmp)
         _write_fixture_files(workspace, case.files)
@@ -350,6 +390,7 @@ async def run_case(case: BenchmarkCase) -> dict[str, Any]:
                 if case.enable_task_memory
                 else None
             ),
+            trace_recorder=trace_recorder,
         )
         agent.messages.extend(case.seed_messages)
         agent.add_user_message(case.task)
@@ -375,12 +416,20 @@ async def run_case(case: BenchmarkCase) -> dict[str, Any]:
         }
         if case.custom_check is not None:
             checks.update(case.custom_check(agent, workspace, output))
+        status = _benchmark_case_status(case, checks)
 
         return {
             "name": case.name,
             "description": case.description,
             "passed": all(checks.values()),
             "checks": checks,
+            "status": status,
+            "agent_run_id": agent.run_id,
+            "workspace_files": {
+                path: _read_file_if_exists(workspace, path)
+                for path in case.expect_files
+            },
+            "tool_evidence": tool_messages,
             "elapsed_ms": elapsed_ms,
             "llm_calls": len(llm.calls),
             "tool_messages": len(tool_messages),
@@ -395,11 +444,69 @@ async def run_case(case: BenchmarkCase) -> dict[str, Any]:
         }
 
 
-async def run_benchmark() -> dict[str, Any]:
-    results = [await run_case(case) for case in default_cases()]
+async def run_eval_benchmark(
+    eval_run_id: str = "mini-agent-harness-deterministic",
+    trace_db_path: str | Path | None = None,
+) -> EvalRunReport:
+    cases = {case.name: case for case in default_cases()}
+    suite = _benchmark_suite()
+    candidate = EvalCandidate(candidate_id="scripted-harness", model="scripted", label="Scripted Harness")
+    trace_recorder = StoreTraceRecorder(SQLiteTraceStore(trace_db_path)) if trace_db_path is not None else None
+
+    async def run_candidate(_: EvalCandidate, task: EvalTask) -> EvalExecution:
+        result = await run_case(cases[task.task_id], trace_recorder=trace_recorder)
+        tokens = result["tokens"]
+        return EvalExecution(
+            output=result["output"],
+            status=result["status"],
+            agent_run_id=result["agent_run_id"],
+            workspace_files=result["workspace_files"],
+            tool_evidence=result["tool_evidence"],
+            duration_ms=result["elapsed_ms"],
+            prompt_tokens=tokens["prompt"],
+            completion_tokens=tokens["completion"],
+            total_tokens=tokens["total"],
+            metadata={
+                "legacy_checks": result["checks"],
+                "legacy_passed": result["passed"],
+                "description": result["description"],
+                "llm_calls": result["llm_calls"],
+                "tool_messages": result["tool_messages"],
+                "message_count": result["message_count"],
+            },
+        )
+
+    return await run_eval_suite(eval_run_id, suite, [candidate], run_candidate)
+
+
+def _legacy_report_from_eval(report: EvalRunReport) -> dict[str, Any]:
+    results = [
+        {
+            "name": result.task_id,
+            "description": result.metadata.get("description", ""),
+            "passed": result.passed,
+            "checks": result.metadata.get("legacy_checks", {}),
+            "status": result.status,
+            "agent_run_id": result.agent_run_id,
+            "elapsed_ms": result.duration_ms,
+            "llm_calls": result.metadata.get("llm_calls", 0),
+            "tool_messages": result.metadata.get("tool_messages", 0),
+            "message_count": result.metadata.get("message_count", 0),
+            "tokens": {
+                "prompt": result.prompt_tokens,
+                "completion": result.completion_tokens,
+                "total": result.total_tokens,
+                "cached": 0,
+            },
+            "output": result.output,
+        }
+        for result in report.results
+    ]
     passed = sum(1 for result in results if result["passed"])
     return {
-        "suite": "mini-agent-harness",
+        "suite": report.suite.suite_id,
+        "suite_version": report.suite.version,
+        "eval_run_id": report.eval_run_id,
         "case_count": len(results),
         "passed": passed,
         "failed": len(results) - passed,
@@ -408,6 +515,10 @@ async def run_benchmark() -> dict[str, Any]:
         "total_elapsed_ms": round(sum(result["elapsed_ms"] for result in results), 2),
         "cases": results,
     }
+
+
+async def run_benchmark(trace_db_path: str | Path | None = None) -> dict[str, Any]:
+    return _legacy_report_from_eval(await run_eval_benchmark(trace_db_path=trace_db_path))
 
 
 @dataclass
