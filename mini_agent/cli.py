@@ -550,7 +550,7 @@ def try_restore_checkpoint(agent: Agent, checkpoint_store: CheckpointStore, work
     return True
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments
 
     Returns:
@@ -565,6 +565,8 @@ Examples:
   mini-agent --workspace /path/to/dir     # Use specific workspace directory
   mini-agent log                          # Show log directory and recent files
   mini-agent log agent_run_xxx.log        # Read a specific log file
+  mini-agent eval run --db evals.sqlite3  # Run deterministic eval and persist results
+  mini-agent eval report --db evals.sqlite3
         """,
     )
     parser.add_argument(
@@ -600,7 +602,66 @@ Examples:
         help="Log filename to read (optional, shows directory if omitted)",
     )
 
-    return parser.parse_args()
+    # eval subcommand group
+    eval_parser = subparsers.add_parser("eval", help="Run and report local evaluations")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
+
+    eval_run_parser = eval_subparsers.add_parser("run", help="Run deterministic benchmark evaluation")
+    eval_run_parser.add_argument(
+        "--db",
+        type=str,
+        default="evals.sqlite3",
+        help="SQLite database path for eval and trace records",
+    )
+
+    eval_report_parser = eval_subparsers.add_parser("report", help="Print the latest evaluation report")
+    eval_report_parser.add_argument(
+        "--db",
+        type=str,
+        default="evals.sqlite3",
+        help="SQLite database path containing evaluation records",
+    )
+
+    return parser.parse_args(argv)
+
+
+def handle_eval_command(args: argparse.Namespace) -> int:
+    """Handle eval subcommands."""
+
+    db_path = Path(args.db).expanduser().absolute()
+    if args.eval_command == "run":
+        from benchmarks.agent_benchmark import run_eval_benchmark
+
+        report = asyncio.run(run_eval_benchmark(db_path=db_path))
+        print_panel(
+            "Eval Run",
+            [
+                f"{label('eval_run_id')} {report.eval_run_id}",
+                f"{label('suite')} {report.suite.suite_key}",
+                f"{label('passed')} {report.case_count - report.failed}/{report.case_count}",
+                f"{label('pass rate')} {report.pass_rate * 100:.2f}%",
+                f"{label('database')} {db_path}",
+            ],
+            accent=Colors.BRIGHT_GREEN if report.failed == 0 else Colors.BRIGHT_YELLOW,
+        )
+        return 0 if report.failed == 0 else 1
+
+    if args.eval_command == "report":
+        from mini_agent.evals import EvalSQLiteStore, format_eval_report
+
+        report = EvalSQLiteStore(db_path).load_latest_report()
+        if report is None:
+            print_panel(
+                "Eval Report",
+                [f"{label('database')} {db_path}", f"{label('status')} no eval runs found"],
+                accent=Colors.BRIGHT_YELLOW,
+            )
+            return 0
+        print(format_eval_report(report))
+        return 0
+
+    print_panel("Eval", [f"{label('unknown')} {args.eval_command}"], accent=Colors.BRIGHT_RED)
+    return 2
 
 
 def notify_tool_status(level: str, message: str) -> None:
@@ -1210,6 +1271,9 @@ def main():
         else:
             show_log_directory(open_file_manager=True)
         return
+
+    if args.command == "eval":
+        raise SystemExit(handle_eval_command(args))
 
     # Determine workspace directory
     # Expand ~ to user home directory for portability
