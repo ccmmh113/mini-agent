@@ -336,6 +336,15 @@ class Agent:
                 self._save_checkpoint(step, "cancelled")
                 cancel_msg = "Task cancelled by user."
                 self.renderer.cancellation(cancel_msg)
+                self._trace_run_record(
+                    started_at=run_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int((perf_counter() - run_start_time) * 1000),
+                    status=RunStatus.CANCELLED,
+                    terminal_reason="cancelled",
+                    total_steps=step,
+                )
+                self._trace_event(TraceEventKind.RUN_CANCELLED, {"step_index": step})
                 return cancel_msg
 
             step_start_time = perf_counter()
@@ -529,6 +538,23 @@ class Agent:
                 self._save_checkpoint(step, "cancelled")
                 cancel_msg = "Task cancelled by user."
                 self.renderer.cancellation(cancel_msg)
+                self._trace_step_record(
+                    step_id=step_id,
+                    step_index=step_index,
+                    started_at=step_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int((perf_counter() - step_start_time) * 1000),
+                    stop_reason="cancelled",
+                )
+                self._trace_run_record(
+                    started_at=run_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int((perf_counter() - run_start_time) * 1000),
+                    status=RunStatus.CANCELLED,
+                    terminal_reason="cancelled",
+                    total_steps=step,
+                )
+                self._trace_event(TraceEventKind.RUN_CANCELLED, {"step_index": step_index})
                 return cancel_msg
 
             # Execute tool calls
@@ -559,6 +585,23 @@ class Agent:
                     self._save_checkpoint(step, "cancelled")
                     cancel_msg = "Task cancelled by user."
                     self.renderer.cancellation(cancel_msg)
+                    self._trace_step_record(
+                        step_id=step_id,
+                        step_index=step_index,
+                        started_at=step_started_at,
+                        ended_at=self._trace_now(),
+                        duration_ms=int((perf_counter() - step_start_time) * 1000),
+                        stop_reason="cancelled",
+                    )
+                    self._trace_run_record(
+                        started_at=run_started_at,
+                        ended_at=self._trace_now(),
+                        duration_ms=int((perf_counter() - run_start_time) * 1000),
+                        status=RunStatus.CANCELLED,
+                        terminal_reason="cancelled",
+                        total_steps=step,
+                    )
+                    self._trace_event(TraceEventKind.RUN_CANCELLED, {"step_index": step_index})
                     return cancel_msg
 
             step_elapsed = perf_counter() - step_start_time
@@ -579,6 +622,15 @@ class Agent:
         error_msg = f"Task couldn't be completed after {self.max_steps} steps."
         self.renderer.max_steps_reached(error_msg)
         self._save_checkpoint(step, "max_steps")
+        self._trace_run_record(
+            started_at=run_started_at,
+            ended_at=self._trace_now(),
+            duration_ms=int((perf_counter() - run_start_time) * 1000),
+            status=RunStatus.MAX_STEPS,
+            terminal_reason="max_steps",
+            total_steps=step,
+        )
+        self._trace_event(TraceEventKind.RUN_MAX_STEPS, {"steps": step})
         return error_msg
 
     def get_history(self) -> list[Message]:

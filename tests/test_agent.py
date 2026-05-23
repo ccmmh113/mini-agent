@@ -404,6 +404,62 @@ async def test_agent_records_llm_failure_and_failed_run(tmp_path):
     assert recorder.events[-1].kind is TraceEventKind.RUN_FAILED
 
 
+@pytest.mark.asyncio
+async def test_agent_records_cancelled_run(tmp_path):
+    recorder = AgentTraceRecorder()
+    llm_client = MagicMock(spec=LLMClient)
+    agent = _silence_agent_renderer(
+        Agent(
+            llm_client=llm_client,
+            system_prompt="System",
+            tools=[],
+            workspace_dir=str(tmp_path),
+            trace_recorder=recorder,
+        )
+    )
+    agent.add_user_message("cancel")
+    cancel_event = asyncio.Event()
+    cancel_event.set()
+
+    result = await agent.run(cancel_event=cancel_event)
+
+    assert result == "Task cancelled by user."
+    assert recorder.runs[-1].status is RunStatus.CANCELLED
+    assert recorder.runs[-1].terminal_reason == "cancelled"
+    assert recorder.events[-1].kind is TraceEventKind.RUN_CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_agent_records_max_steps_run(tmp_path):
+    recorder = AgentTraceRecorder()
+    llm_client = MagicMock(spec=LLMClient)
+    llm_client.generate = AsyncMock(
+        return_value=LLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="call-1", type="function", function=FunctionCall(name="missing_tool", arguments={}))],
+            finish_reason="tool_calls",
+        )
+    )
+    agent = _silence_agent_renderer(
+        Agent(
+            llm_client=llm_client,
+            system_prompt="System",
+            tools=[],
+            workspace_dir=str(tmp_path),
+            max_steps=1,
+            trace_recorder=recorder,
+        )
+    )
+    agent.add_user_message("loop")
+
+    result = await agent.run()
+
+    assert "couldn't be completed" in result
+    assert recorder.runs[-1].status is RunStatus.MAX_STEPS
+    assert recorder.runs[-1].terminal_reason == "max_steps"
+    assert recorder.events[-1].kind is TraceEventKind.RUN_MAX_STEPS
+
+
 def test_checkpoint_store_can_restore_messages(tmp_path):
     checkpoint_store = CheckpointStore(tmp_path / ".mini_agent" / "checkpoints")
     original_messages = [
