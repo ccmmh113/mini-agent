@@ -566,6 +566,7 @@ Examples:
   mini-agent log                          # Show log directory and recent files
   mini-agent log agent_run_xxx.log        # Read a specific log file
   mini-agent eval run --db evals.sqlite3  # Run deterministic eval and persist results
+  mini-agent eval run --real --candidate gpt=./configs/gpt.yaml --db evals.sqlite3
   mini-agent eval report --db evals.sqlite3
         """,
     )
@@ -613,6 +614,23 @@ Examples:
         default="evals.sqlite3",
         help="SQLite database path for eval and trace records",
     )
+    eval_run_parser.add_argument(
+        "--real",
+        action="store_true",
+        help="Run the real-model benchmark suite instead of the deterministic harness suite",
+    )
+    eval_run_parser.add_argument(
+        "--candidate",
+        action="append",
+        default=[],
+        help="Real-model candidate in name=config.yaml format. Repeat for GPT, DeepSeek, Claude, etc.",
+    )
+    eval_run_parser.add_argument(
+        "--output-root",
+        type=str,
+        default=None,
+        help="Directory for real-model benchmark workspaces and artifacts",
+    )
 
     eval_report_parser = eval_subparsers.add_parser("report", help="Print the latest evaluation report")
     eval_report_parser.add_argument(
@@ -630,14 +648,36 @@ def handle_eval_command(args: argparse.Namespace) -> int:
 
     db_path = Path(args.db).expanduser().absolute()
     if args.eval_command == "run":
-        from benchmarks.agent_benchmark import run_eval_benchmark
+        if args.real:
+            from benchmarks.agent_benchmark import RealEvalCandidate, load_real_eval_candidates, run_real_eval_benchmark
 
-        report = asyncio.run(run_eval_benchmark(db_path=db_path))
+            candidates = load_real_eval_candidates(args.candidate)
+            if not candidates:
+                config_path = Config.get_default_config_path()
+                candidates = [
+                    RealEvalCandidate(
+                        candidate_id="default",
+                        config=Config.load(),
+                        config_path=config_path,
+                        label="default",
+                    )
+                ]
+            output_root = (
+                Path(args.output_root).expanduser().absolute()
+                if args.output_root
+                else Path("outputs") / "evals" / datetime.now().strftime("%Y%m%d-%H%M%S")
+            )
+            report = asyncio.run(run_real_eval_benchmark(candidates, output_root=output_root, db_path=db_path))
+        else:
+            from benchmarks.agent_benchmark import run_eval_benchmark
+
+            report = asyncio.run(run_eval_benchmark(db_path=db_path))
         print_panel(
             "Eval Run",
             [
                 f"{label('eval_run_id')} {report.eval_run_id}",
                 f"{label('suite')} {report.suite.suite_key}",
+                f"{label('candidates')} {len(report.candidates)}",
                 f"{label('passed')} {report.case_count - report.failed}/{report.case_count}",
                 f"{label('pass rate')} {report.pass_rate * 100:.2f}%",
                 f"{label('database')} {db_path}",
