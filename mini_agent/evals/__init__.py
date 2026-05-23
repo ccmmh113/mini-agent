@@ -10,6 +10,7 @@ from .spec import (
     EvalSuite,
     EvalTask,
 )
+from .scorers import score_task_result
 
 __all__ = [
     "DEFAULT_SCORERS",
@@ -20,4 +21,5 @@ __all__ = [
     "EvalScore",
     "EvalSuite",
     "EvalTask",
+    "score_task_result",
 ]
