@@ -27,6 +27,7 @@ from mini_agent.evals import (
     EvalCandidate,
     EvalExecution,
     EvalRunReport,
+    EvalSQLiteStore,
     EvalSuite,
     EvalTask,
     run_eval_suite,
@@ -446,12 +447,16 @@ async def run_case(case: BenchmarkCase, trace_recorder: TraceRecorder | None = N
 
 async def run_eval_benchmark(
     eval_run_id: str = "mini-agent-harness-deterministic",
+    db_path: str | Path | None = None,
     trace_db_path: str | Path | None = None,
+    eval_db_path: str | Path | None = None,
 ) -> EvalRunReport:
     cases = {case.name: case for case in default_cases()}
     suite = _benchmark_suite()
     candidate = EvalCandidate(candidate_id="scripted-harness", model="scripted", label="Scripted Harness")
-    trace_recorder = StoreTraceRecorder(SQLiteTraceStore(trace_db_path)) if trace_db_path is not None else None
+    trace_path = trace_db_path or db_path
+    eval_path = eval_db_path or db_path
+    trace_recorder = StoreTraceRecorder(SQLiteTraceStore(trace_path)) if trace_path is not None else None
 
     async def run_candidate(_: EvalCandidate, task: EvalTask) -> EvalExecution:
         result = await run_case(cases[task.task_id], trace_recorder=trace_recorder)
@@ -476,7 +481,10 @@ async def run_eval_benchmark(
             },
         )
 
-    return await run_eval_suite(eval_run_id, suite, [candidate], run_candidate)
+    report = await run_eval_suite(eval_run_id, suite, [candidate], run_candidate)
+    if eval_path is not None:
+        EvalSQLiteStore(eval_path).save_report(report)
+    return report
 
 
 def _legacy_report_from_eval(report: EvalRunReport) -> dict[str, Any]:
