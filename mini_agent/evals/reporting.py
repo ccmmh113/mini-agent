@@ -1,0 +1,120 @@
+"""Markdown reporting for evaluation runs."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .spec import EvalCandidate, EvalResult, EvalRunReport
+
+
+@dataclass(frozen=True)
+class _CandidateSummary:
+    cases: int = 0
+    failed: int = 0
+    total_tokens: int = 0
+    total_cost: float = 0.0
+    duration_ms: float = 0.0
+
+    @property
+    def pass_rate(self) -> float:
+        return 0.0 if self.cases == 0 else (self.cases - self.failed) / self.cases
+
+
+def format_eval_report(report: EvalRunReport) -> str:
+    """Render an evaluation report as deterministic Markdown."""
+
+    lines = [
+        f"# Evaluation Report: {report.suite.name}",
+        "",
+        f"**Suite:** `{report.suite.suite_key}`",
+        f"**Eval Run:** `{report.eval_run_id}`",
+        f"**Cases:** {report.case_count}",
+        f"**Failed:** {report.failed}",
+        f"**Pass Rate:** {_format_percent(report.pass_rate)}",
+        f"**Tokens:** {report.total_tokens}",
+        f"**Cost:** {report.total_cost:.4f}",
+        f"**Duration:** {_format_duration(report.total_duration_ms)}",
+        "",
+        "## Candidate Comparison",
+        "",
+        "| Candidate | Model | Cases | Failed | Pass Rate | Tokens | Cost | Duration |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+
+    summaries = _candidate_summaries(report.results)
+    for candidate in report.candidates:
+        summary = summaries.get(candidate.candidate_id, _CandidateSummary())
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    candidate.label or candidate.candidate_id,
+                    f"`{candidate.model}`",
+                    str(summary.cases),
+                    str(summary.failed),
+                    _format_percent(summary.pass_rate),
+                    str(summary.total_tokens),
+                    f"{summary.total_cost:.4f}",
+                    _format_duration(summary.duration_ms),
+                ]
+            )
+            + " |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Task Results",
+            "",
+            "| Candidate | Task | Passed | Score | Status | Duration | Tokens | Cost | Trace Run | Failure |",
+            "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- | --- |",
+        ]
+    )
+    for result in report.results:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    result.candidate_id,
+                    result.task_id,
+                    "PASS" if result.passed else "FAIL",
+                    _format_score(result),
+                    result.status,
+                    _format_duration(result.duration_ms),
+                    str(result.total_tokens),
+                    f"{result.total_cost:.4f}",
+                    f"`{result.agent_run_id}`" if result.agent_run_id else "",
+                    result.failure_reason or "",
+                ]
+            )
+            + " |"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _candidate_summaries(results: list[EvalResult]) -> dict[str, _CandidateSummary]:
+    summaries: dict[str, _CandidateSummary] = {}
+    for result in results:
+        current = summaries.get(result.candidate_id, _CandidateSummary())
+        summaries[result.candidate_id] = _CandidateSummary(
+            cases=current.cases + 1,
+            failed=current.failed + (0 if result.passed else 1),
+            total_tokens=current.total_tokens + result.total_tokens,
+            total_cost=current.total_cost + result.total_cost,
+            duration_ms=current.duration_ms + result.duration_ms,
+        )
+    return summaries
+
+
+def _format_percent(value: float) -> str:
+    return f"{value * 100:.2f}%"
+
+
+def _format_duration(duration_ms: float) -> str:
+    return f"{duration_ms:.0f}ms"
+
+
+def _format_score(result: EvalResult) -> str:
+    return f"{result.score.score:g}/{result.score.max_score:g}"
