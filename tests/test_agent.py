@@ -653,6 +653,8 @@ async def test_agent_simple_task():
 
     # Load config
     config_path = Path("mini_agent/config/config.yaml")
+    if not config_path.exists():
+        pytest.skip("config.yaml not found")
     config = Config.from_yaml(config_path)
 
     # Create temp workspace
@@ -735,6 +737,8 @@ async def test_agent_bash_task():
 
     # Load config
     config_path = Path("mini_agent/config/config.yaml")
+    if not config_path.exists():
+        pytest.skip("config.yaml not found")
     config = Config.from_yaml(config_path)
 
     # Create temp workspace

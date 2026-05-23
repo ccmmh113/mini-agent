@@ -18,6 +18,8 @@ from mini_agent.schema import Message
 def load_config():
     """Load config from config.yaml."""
     config_path = Path("mini_agent/config/config.yaml")
+    if not config_path.exists():
+        pytest.skip("config.yaml not found")
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
