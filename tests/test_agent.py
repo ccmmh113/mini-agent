@@ -12,7 +12,8 @@ from mini_agent import LLMClient
 from mini_agent.agent import Agent
 from mini_agent.checkpoint import CheckpointStore
 from mini_agent.config import Config
-from mini_agent.schema import FunctionCall, LLMResponse, Message, ToolCall
+from mini_agent.observability import RunStatus, TraceEventKind
+from mini_agent.schema import FunctionCall, LLMResponse, Message, TokenUsage, ToolCall
 from mini_agent.tools.base import Tool, ToolResult
 from mini_agent.tools import BashTool, EditTool, ReadTool, WriteTool
 from mini_agent.tools.task_memory_tool import EpisodeMemoryStore, TaskMemoryHook
@@ -39,6 +40,46 @@ class DummyTool(Tool):
 
     async def execute(self, value: str) -> ToolResult:
         return ToolResult(success=True, content=f"processed {value}")
+
+
+class SilentRenderer:
+    def __getattr__(self, name):
+        def _noop(*args, **kwargs):
+            return None
+
+        return _noop
+
+
+class AgentTraceRecorder:
+    def __init__(self):
+        self.runs = []
+        self.steps = []
+        self.llm_calls = []
+        self.tool_calls = []
+        self.events = []
+
+    def record_run(self, run):
+        self.runs.append(run)
+
+    def record_step(self, step):
+        self.steps.append(step)
+
+    def record_llm_call(self, call):
+        self.llm_calls.append(call)
+
+    def record_tool_call(self, call):
+        self.tool_calls.append(call)
+
+    def record_event(self, event):
+        self.events.append(event)
+
+
+def _silence_agent_renderer(agent: Agent) -> Agent:
+    renderer = SilentRenderer()
+    agent.renderer = renderer
+    agent.message_summarizer.renderer = renderer
+    agent.compression_pipeline.renderer = renderer
+    return agent
 
 
 def _mock_bash_llm(command: str, run_in_background: bool = False):
@@ -298,6 +339,69 @@ async def test_agent_uses_compression_pipeline_before_final_request(tmp_path):
     agent.compression_pipeline.compress_before_request.assert_awaited_once()
     request_messages = llm_client.generate.await_args.kwargs["messages"]
     assert [message.content for message in request_messages[1:]] == ["compressed user"]
+
+
+@pytest.mark.asyncio
+async def test_agent_records_completed_run_and_llm_usage(tmp_path):
+    recorder = AgentTraceRecorder()
+    llm_client = MagicMock(spec=LLMClient)
+    llm_client.model = "gpt-test"
+    llm_client.generate = AsyncMock(
+        return_value=LLMResponse(
+            content="done",
+            tool_calls=None,
+            finish_reason="stop",
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12, cached_tokens=3),
+        )
+    )
+    agent = _silence_agent_renderer(
+        Agent(
+            llm_client=llm_client,
+            system_prompt="System",
+            tools=[],
+            workspace_dir=str(tmp_path),
+            trace_recorder=recorder,
+        )
+    )
+    agent.add_user_message("finish")
+
+    result = await agent.run()
+
+    assert result == "done"
+    assert recorder.runs[0].status is RunStatus.RUNNING
+    assert recorder.runs[-1].status is RunStatus.COMPLETED
+    assert recorder.runs[-1].terminal_reason == "completed"
+    assert recorder.runs[-1].total_tokens == 12
+    assert recorder.llm_calls[-1].finish_reason == "stop"
+    assert recorder.llm_calls[-1].cached_tokens == 3
+    assert recorder.events[0].kind is TraceEventKind.RUN_STARTED
+    assert recorder.events[-1].kind is TraceEventKind.RUN_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_agent_records_llm_failure_and_failed_run(tmp_path):
+    recorder = AgentTraceRecorder()
+    llm_client = MagicMock(spec=LLMClient)
+    llm_client.model = "gpt-test"
+    llm_client.generate = AsyncMock(side_effect=RuntimeError("provider down"))
+    agent = _silence_agent_renderer(
+        Agent(
+            llm_client=llm_client,
+            system_prompt="System",
+            tools=[],
+            workspace_dir=str(tmp_path),
+            trace_recorder=recorder,
+        )
+    )
+    agent.add_user_message("fail")
+
+    result = await agent.run()
+
+    assert "LLM call failed" in result
+    assert recorder.llm_calls[-1].error == "RuntimeError: provider down"
+    assert recorder.runs[-1].status is RunStatus.FAILED
+    assert recorder.runs[-1].terminal_reason == "llm_failed"
+    assert recorder.events[-1].kind is TraceEventKind.RUN_FAILED
 
 
 def test_checkpoint_store_can_restore_messages(tmp_path):

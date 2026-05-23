@@ -1,15 +1,19 @@
 """Core Agent implementation."""
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Awaitable, Callable, Optional
+from uuid import uuid4
 
 from .checkpoint import CheckpointStore
 from .checkpointing import CheckpointCoordinator
 from .console import AgentConsoleRenderer, Colors
 from .context_budget import PromptLayerBudgets
 from .llm import LLMClient
+from .observability import LLMCallRecord, NullTraceRecorder, RunRecord, RunStatus, StepRecord, TraceEvent, TraceEventKind
+from .observability import TraceRecorder
 from .request_context import RequestContextBuilder
 from .runtime import RunContext, ToolRuntime
 from .schema import Message, TokenCost, TokenPricing
@@ -43,16 +47,20 @@ class Agent:
         preserve_thinking: bool = False,
         show_thinking: bool = False,
         log_thinking: bool = False,
+        trace_recorder: TraceRecorder | None = None,
     ):
         self.llm = llm_client
         self.tools = {tool.name: tool for tool in tools}
         self.max_steps = max_steps
         self.token_limit = token_limit
+        self.trace_recorder = trace_recorder or NullTraceRecorder()
+        self.run_id: str | None = None
         self.runtime_context = RunContext(
             workspace_dir=Path(workspace_dir),
             checkpoint_store=checkpoint_store,
             task_memory_hook=task_memory_hook,
             tool_confirmation_callback=tool_confirmation_callback,
+            trace_recorder=self.trace_recorder,
         )
         self.tool_runtime = ToolRuntime(self.tools, self.runtime_context)
         self.workspace_dir = self.runtime_context.workspace_dir
@@ -195,6 +203,97 @@ class Agent:
             self.messages = self.messages[:last_assistant_idx]
             self.renderer.incomplete_messages_cleaned(removed_count)
 
+    def _trace_now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _trace_event(self, kind: TraceEventKind, payload: dict[str, Any] | None = None) -> None:
+        if self.run_id is None:
+            return
+
+        try:
+            self.trace_recorder.record_event(
+                TraceEvent(
+                    event_id=f"event-{uuid4().hex}",
+                    run_id=self.run_id,
+                    kind=kind,
+                    created_at=self._trace_now(),
+                    payload=payload or {},
+                )
+            )
+        except Exception:
+            return
+
+    def _trace_run_record(
+        self,
+        *,
+        started_at: str,
+        status: RunStatus,
+        total_steps: int,
+        ended_at: str | None = None,
+        duration_ms: int | None = None,
+        terminal_reason: str | None = None,
+    ) -> None:
+        if self.run_id is None:
+            return
+
+        try:
+            self.trace_recorder.record_run(
+                RunRecord(
+                    run_id=self.run_id,
+                    workspace_dir=str(self.workspace_dir),
+                    model=getattr(self.llm, "model", None),
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    duration_ms=duration_ms,
+                    status=status,
+                    terminal_reason=terminal_reason,
+                    total_steps=total_steps,
+                    prompt_tokens=self.cumulative_prompt_tokens,
+                    completion_tokens=self.cumulative_completion_tokens,
+                    total_tokens=self.cumulative_total_tokens,
+                    cached_tokens=self.cumulative_cached_tokens,
+                    cache_write_tokens=self.cumulative_cache_write_tokens,
+                    total_cost=self.cumulative_token_cost.total_cost,
+                    currency=self.cumulative_token_cost.currency,
+                )
+            )
+        except Exception:
+            return
+
+    def _trace_step_record(
+        self,
+        *,
+        step_id: str,
+        step_index: int,
+        started_at: str,
+        ended_at: str | None = None,
+        duration_ms: int | None = None,
+        stop_reason: str | None = None,
+    ) -> None:
+        if self.run_id is None:
+            return
+
+        try:
+            self.trace_recorder.record_step(
+                StepRecord(
+                    step_id=step_id,
+                    run_id=self.run_id,
+                    step_index=step_index,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    duration_ms=duration_ms,
+                    stop_reason=stop_reason,
+                )
+            )
+        except Exception:
+            return
+
+    def _trace_llm_call(self, call: LLMCallRecord) -> None:
+        try:
+            self.trace_recorder.record_llm_call(call)
+        except Exception:
+            return
+
     async def run(self, cancel_event: Optional[asyncio.Event] = None) -> str:
         """Execute agent loop until task is complete or max steps reached.
 
@@ -211,6 +310,12 @@ class Agent:
         if cancel_event is not None:
             self.cancel_event = cancel_event
         self.runtime_context.cancel_event = self.cancel_event
+        self.run_id = f"run-{uuid4().hex}"
+        self.runtime_context.run_id = self.run_id
+        run_started_at = self._trace_now()
+        run_start_time = perf_counter()
+        self._trace_run_record(started_at=run_started_at, status=RunStatus.RUNNING, total_steps=0)
+        self._trace_event(TraceEventKind.RUN_STARTED, {"workspace_dir": str(self.workspace_dir)})
 
         # Auto-start/resume task memory if hook is configured
         if self.task_memory_hook is not None:
@@ -223,7 +328,6 @@ class Agent:
         self.renderer.log_file(self.logger.get_log_file_path())
 
         step = 0
-        run_start_time = perf_counter()
 
         while step < self.max_steps:
             # Check for cancellation at start of each step
@@ -235,6 +339,12 @@ class Agent:
                 return cancel_msg
 
             step_start_time = perf_counter()
+            step_index = step + 1
+            step_id = f"step-{uuid4().hex}"
+            step_started_at = self._trace_now()
+            self.runtime_context.step_index = step_index
+            self._trace_step_record(step_id=step_id, step_index=step_index, started_at=step_started_at)
+            self._trace_event(TraceEventKind.STEP_STARTED, {"step_id": step_id, "step_index": step_index})
             # Get tool list for LLM call
             tool_list = list(self.tools.values())
 
@@ -255,6 +365,15 @@ class Agent:
             # Log LLM request and call LLM with Tool objects directly
             self.logger.log_request(messages=request_messages, tools=tool_list)
 
+            llm_call_id = f"llm-{uuid4().hex}"
+            llm_started_at = self._trace_now()
+            llm_start_time = perf_counter()
+            request_tool_names = [tool.name for tool in tool_list]
+            self._trace_event(
+                TraceEventKind.LLM_STARTED,
+                {"call_id": llm_call_id, "step_index": step_index, "message_count": len(request_messages)},
+            )
+
             try:
                 response = await self.llm.generate(messages=request_messages, tools=tool_list)
             except Exception as e:
@@ -267,6 +386,37 @@ class Agent:
                 else:
                     error_msg = f"LLM call failed: {str(e)}"
                     self.renderer.llm_error(error_msg)
+                self._trace_llm_call(
+                    LLMCallRecord(
+                        call_id=llm_call_id,
+                        run_id=self.run_id,
+                        step_index=step_index,
+                        started_at=llm_started_at,
+                        ended_at=self._trace_now(),
+                        duration_ms=int((perf_counter() - llm_start_time) * 1000),
+                        request_message_count=len(request_messages),
+                        request_tool_names=request_tool_names,
+                        error=f"{type(e).__name__}: {str(e)}",
+                    )
+                )
+                self._trace_event(TraceEventKind.LLM_FAILED, {"call_id": llm_call_id, "step_index": step_index})
+                self._trace_step_record(
+                    step_id=step_id,
+                    step_index=step_index,
+                    started_at=step_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int((perf_counter() - step_start_time) * 1000),
+                    stop_reason="llm_failed",
+                )
+                self._trace_run_record(
+                    started_at=run_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int((perf_counter() - run_start_time) * 1000),
+                    status=RunStatus.FAILED,
+                    terminal_reason="llm_failed",
+                    total_steps=step,
+                )
+                self._trace_event(TraceEventKind.RUN_FAILED, {"reason": "llm_failed"})
                 self._save_checkpoint(step, "failed")
                 return error_msg
 
@@ -299,6 +449,23 @@ class Agent:
                     cache_write_tokens=self.api_cache_write_tokens,
                     cost=token_cost,
                 )
+
+            self._trace_llm_call(
+                LLMCallRecord(
+                    call_id=llm_call_id,
+                    run_id=self.run_id,
+                    step_index=step_index,
+                    started_at=llm_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int((perf_counter() - llm_start_time) * 1000),
+                    finish_reason=response.finish_reason,
+                    request_message_count=len(request_messages),
+                    request_tool_names=request_tool_names,
+                    usage=response.usage,
+                    cost=self.last_token_cost,
+                )
+            )
+            self._trace_event(TraceEventKind.LLM_COMPLETED, {"call_id": llm_call_id, "step_index": step_index})
 
             # Log LLM response
             self.logger.log_response(
@@ -333,10 +500,27 @@ class Agent:
                 step_elapsed = perf_counter() - step_start_time
                 total_elapsed = perf_counter() - run_start_time
                 self.renderer.step_completed(step + 1, step_elapsed, total_elapsed)
+                self._trace_step_record(
+                    step_id=step_id,
+                    step_index=step_index,
+                    started_at=step_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int(step_elapsed * 1000),
+                    stop_reason="completed",
+                )
                 if self.task_memory_hook is not None:
                     self.task_memory_hook.finish_task(summary=response.content)
                 self._save_checkpoint(step, "completed")
                 self.last_run_completed = True
+                self._trace_run_record(
+                    started_at=run_started_at,
+                    ended_at=self._trace_now(),
+                    duration_ms=int(total_elapsed * 1000),
+                    status=RunStatus.COMPLETED,
+                    terminal_reason="completed",
+                    total_steps=step_index,
+                )
+                self._trace_event(TraceEventKind.RUN_COMPLETED, {"steps": step_index})
                 return response.content
 
             # Check for cancellation before executing tools
@@ -380,6 +564,14 @@ class Agent:
             step_elapsed = perf_counter() - step_start_time
             total_elapsed = perf_counter() - run_start_time
             self.renderer.step_completed(step + 1, step_elapsed, total_elapsed)
+            self._trace_step_record(
+                step_id=step_id,
+                step_index=step_index,
+                started_at=step_started_at,
+                ended_at=self._trace_now(),
+                duration_ms=int(step_elapsed * 1000),
+                stop_reason="tool_calls",
+            )
 
             step += 1
 
