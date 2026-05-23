@@ -22,7 +22,7 @@ class EvalTask:
     prompt: str
     description: str = ""
     expected_output_contains: list[str] = field(default_factory=list)
-    expected_files: dict[str, str] = field(default_factory=dict)
+    expected_files: dict[str, str | list[str]] = field(default_factory=dict)
     expected_tool_evidence_contains: list[str] = field(default_factory=list)
     expected_status: str = "completed"
     scorers: list[str] = field(default_factory=lambda: list(DEFAULT_SCORERS))
