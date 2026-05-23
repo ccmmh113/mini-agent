@@ -35,11 +35,20 @@ def format_eval_report(report: EvalRunReport) -> str:
         f"**Cost:** {report.total_cost:.4f}",
         f"**Duration:** {_format_duration(report.total_duration_ms)}",
         "",
-        "## Candidate Comparison",
-        "",
-        "| Candidate | Model | Cases | Failed | Pass Rate | Tokens | Cost | Duration |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
+
+    metrics = report.metadata.get("metrics") if isinstance(report.metadata, dict) else None
+    if isinstance(metrics, dict):
+        lines.extend(_format_metrics_section(metrics))
+
+    lines.extend(
+        [
+            "## Candidate Comparison",
+            "",
+            "| Candidate | Model | Cases | Failed | Pass Rate | Tokens | Cost | Duration |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
 
     summaries = _candidate_summaries(report.results)
     for candidate in report.candidates:
@@ -92,6 +101,29 @@ def format_eval_report(report: EvalRunReport) -> str:
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _format_metrics_section(metrics: dict) -> list[str]:
+    latency = metrics.get("latency_ms", {})
+    tokens = metrics.get("tokens", {})
+    cost = metrics.get("cost", {})
+    max_steps = metrics.get("max_steps", {})
+    tool_failures = metrics.get("tool_evidence_failures", {})
+    scorer_failures = metrics.get("scorer_failures", {})
+    scorer_text = ", ".join(f"{key}={value}" for key, value in scorer_failures.items()) or "none"
+    return [
+        "## Metrics",
+        "",
+        f"- Avg latency: {_format_duration(float(latency.get('avg', 0.0)))}",
+        f"- P50 latency: {_format_duration(float(latency.get('p50', 0.0)))}",
+        f"- P95 latency: {_format_duration(float(latency.get('p95', 0.0)))}",
+        f"- Avg tokens: {float(tokens.get('avg', 0.0)):.2f}",
+        f"- Cost per passed task: {float(cost.get('per_passed', 0.0)):.4f}",
+        f"- Max-step rate: {_format_percent(float(max_steps.get('rate', 0.0)))} ({int(max_steps.get('count', 0))})",
+        f"- Tool-evidence failure rate: {_format_percent(float(tool_failures.get('rate', 0.0)))} ({int(tool_failures.get('count', 0))})",
+        f"- Scorer failures: {scorer_text}",
+        "",
+    ]
 
 
 def _candidate_summaries(results: list[EvalResult]) -> dict[str, _CandidateSummary]:

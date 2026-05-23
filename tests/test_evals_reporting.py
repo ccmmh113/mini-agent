@@ -79,3 +79,39 @@ def test_format_eval_report_includes_summary_candidate_table_and_trace_ids():
     assert "| Model A | `gpt-a` | 2 | 0 | 100.00% | 30 | 0.0300 | 300ms |" in markdown
     assert "| Model B | `gpt-b` | 1 | 1 | 0.00% | 30 | 0.0300 | 300ms |" in markdown
     assert "| model-b | direct | FAIL | 3/4 | failed | 300ms | 30 | 0.0300 | `run-b-direct` | missing output |" in markdown
+
+
+def test_format_eval_report_includes_metrics_section_when_present():
+    suite = EvalSuite(
+        suite_id="metrics",
+        name="Metrics Suite",
+        version="1",
+        tasks=[EvalTask(task_id="a", prompt="A")],
+    )
+    report = EvalRunReport(
+        eval_run_id="eval-metrics",
+        suite=suite,
+        candidates=[EvalCandidate(candidate_id="gpt", model="gpt-4o")],
+        results=[],
+        metadata={
+            "metrics": {
+                "latency_ms": {"avg": 120.0, "p50": 100.0, "p95": 200.0},
+                "tokens": {"avg": 42.0},
+                "cost": {"per_passed": 0.05},
+                "max_steps": {"count": 1, "rate": 0.25},
+                "tool_evidence_failures": {"count": 2, "rate": 0.5},
+                "scorer_failures": {"status": 1, "tool_evidence_contains": 2},
+            }
+        },
+    )
+
+    markdown = format_eval_report(report)
+
+    assert "## Metrics" in markdown
+    assert "- Avg latency: 120ms" in markdown
+    assert "- P95 latency: 200ms" in markdown
+    assert "- Avg tokens: 42.00" in markdown
+    assert "- Cost per passed task: 0.0500" in markdown
+    assert "- Max-step rate: 25.00% (1)" in markdown
+    assert "- Tool-evidence failure rate: 50.00% (2)" in markdown
+    assert "- Scorer failures: status=1, tool_evidence_contains=2" in markdown

@@ -1,0 +1,110 @@
+"""Aggregate metrics for evaluation reports."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from typing import Any
+
+from .spec import EvalResult, EvalRunReport
+
+
+def compute_eval_metrics(report: EvalRunReport) -> dict[str, Any]:
+    """Compute aggregate metrics from an evaluation report."""
+
+    results = report.results
+    case_count = len(results)
+    failed = sum(1 for result in results if not result.passed)
+    passed = case_count - failed
+    durations = [result.duration_ms for result in results]
+    total_tokens = sum(result.total_tokens for result in results)
+    total_cost = sum(result.total_cost for result in results)
+    status_failure_count = sum(1 for result in results if not result.score.breakdown.get("status", True))
+    tool_failure_count = sum(
+        1 for result in results if not result.score.breakdown.get("tool_evidence_contains", True)
+    )
+    max_steps_count = sum(1 for result in results if result.status == "max_steps")
+
+    return {
+        "case_count": case_count,
+        "failed": failed,
+        "pass_rate": _rate(passed, case_count),
+        "latency_ms": {
+            "total": sum(durations),
+            "avg": _avg(durations),
+            "p50": _percentile_nearest_rank(durations, 50),
+            "p95": _percentile_nearest_rank(durations, 95),
+        },
+        "tokens": {
+            "total": total_tokens,
+            "avg": total_tokens / case_count if case_count else 0.0,
+        },
+        "cost": {
+            "total": total_cost,
+            "avg": total_cost / case_count if case_count else 0.0,
+            "per_passed": total_cost / passed if passed else 0.0,
+        },
+        "max_steps": {"count": max_steps_count, "rate": _rate(max_steps_count, case_count)},
+        "status_failures": {"count": status_failure_count, "rate": _rate(status_failure_count, case_count)},
+        "tool_evidence_failures": {"count": tool_failure_count, "rate": _rate(tool_failure_count, case_count)},
+        "scorer_failures": _scorer_failures(results),
+        "candidates": _candidate_metrics(results),
+    }
+
+
+def with_eval_metrics(report: EvalRunReport) -> EvalRunReport:
+    """Return a copy of the report with aggregate metrics in metadata."""
+
+    metadata = dict(report.metadata)
+    metadata["metrics"] = compute_eval_metrics(report)
+    return replace(report, metadata=metadata)
+
+
+def _avg(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _rate(count: int, total: int) -> float:
+    return count / total if total else 0.0
+
+
+def _percentile_nearest_rank(values: list[float], percentile: int) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = max(1, round((percentile / 100) * len(ordered)))
+    return ordered[min(rank, len(ordered)) - 1]
+
+
+def _scorer_failures(results: list[EvalResult]) -> dict[str, int]:
+    failures: dict[str, int] = {}
+    for result in results:
+        for scorer, passed in result.score.breakdown.items():
+            if not passed:
+                failures[scorer] = failures.get(scorer, 0) + 1
+    return dict(sorted(failures.items()))
+
+
+def _candidate_metrics(results: list[EvalResult]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[EvalResult]] = {}
+    for result in results:
+        grouped.setdefault(result.candidate_id, []).append(result)
+
+    metrics: dict[str, dict[str, Any]] = {}
+    for candidate_id, candidate_results in grouped.items():
+        case_count = len(candidate_results)
+        failed = sum(1 for result in candidate_results if not result.passed)
+        durations = [result.duration_ms for result in candidate_results]
+        metrics[candidate_id] = {
+            "case_count": case_count,
+            "failed": failed,
+            "pass_rate": _rate(case_count - failed, case_count),
+            "latency_ms": {
+                "avg": _avg(durations),
+                "p50": _percentile_nearest_rank(durations, 50),
+                "p95": _percentile_nearest_rank(durations, 95),
+            },
+            "tokens": sum(result.total_tokens for result in candidate_results),
+            "cost": sum(result.total_cost for result in candidate_results),
+            "max_steps": sum(1 for result in candidate_results if result.status == "max_steps"),
+        }
+    return metrics
