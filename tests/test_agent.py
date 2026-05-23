@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -13,6 +14,7 @@ from mini_agent.agent import Agent
 from mini_agent.checkpoint import CheckpointStore
 from mini_agent.config import Config
 from mini_agent.observability import RunStatus, TraceEventKind
+from mini_agent.observability import SQLiteTraceStore, StoreTraceRecorder
 from mini_agent.schema import FunctionCall, LLMResponse, Message, TokenUsage, ToolCall
 from mini_agent.tools.base import Tool, ToolResult
 from mini_agent.tools import BashTool, EditTool, ReadTool, WriteTool
@@ -458,6 +460,36 @@ async def test_agent_records_max_steps_run(tmp_path):
     assert recorder.runs[-1].status is RunStatus.MAX_STEPS
     assert recorder.runs[-1].terminal_reason == "max_steps"
     assert recorder.events[-1].kind is TraceEventKind.RUN_MAX_STEPS
+
+
+@pytest.mark.asyncio
+async def test_agent_persists_completed_trace_to_sqlite(tmp_path):
+    db_path = tmp_path / "traces.db"
+    recorder = StoreTraceRecorder(SQLiteTraceStore(db_path))
+    llm_client = MagicMock(spec=LLMClient)
+    llm_client.model = "gpt-test"
+    llm_client.generate = AsyncMock(return_value=LLMResponse(content="done", tool_calls=None, finish_reason="stop"))
+    agent = _silence_agent_renderer(
+        Agent(
+            llm_client=llm_client,
+            system_prompt="System",
+            tools=[],
+            workspace_dir=str(tmp_path),
+            trace_recorder=recorder,
+        )
+    )
+    agent.add_user_message("persist trace")
+
+    assert await agent.run() == "done"
+
+    connection = sqlite3.connect(db_path)
+    run = connection.execute("select status, terminal_reason from agent_runs").fetchone()
+    llm_call_count = connection.execute("select count(*) from llm_calls").fetchone()[0]
+    event_kinds = [row[0] for row in connection.execute("select kind from run_events order by rowid")]
+    assert run == ("completed", "completed")
+    assert llm_call_count == 1
+    assert event_kinds[0] == "run_started"
+    assert event_kinds[-1] == "run_completed"
 
 
 def test_checkpoint_store_can_restore_messages(tmp_path):
