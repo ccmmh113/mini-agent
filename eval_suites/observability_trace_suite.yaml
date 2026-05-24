@@ -1,0 +1,53 @@
+suite_id: mini-agent-observability-trace
+name: Mini Agent Observability Trace Evaluation
+version: v1
+description: >
+  Module-level suite for trace and eval linkage. Run with --db, then verify
+  eval_results.agent_run_id joins to agent_runs.run_id and tool/LLM rows exist.
+metadata:
+  module: observability
+  verification_sql:
+    - "select count(*) from eval_results er join agent_runs ar on ar.run_id = er.agent_run_id;"
+    - "select count(*) from tool_calls;"
+    - "select count(*) from llm_calls;"
+tasks:
+  - task_id: trace_direct_completion
+    description: Direct completion should create an agent_run and llm_call without tool calls.
+    prompt: >
+      不要使用工具。只回复 TRACE_DIRECT_OK，并额外包含 agent_run_id linkage。
+    expected_output_contains:
+      - TRACE_DIRECT_OK
+      - agent_run_id linkage
+    metadata:
+      agent_overrides:
+        token_limit: 2000
+
+  - task_id: trace_file_tool_chain
+    description: File write/read chain should create tool call trace rows and eval linkage.
+    prompt: >
+      请使用 write_file 创建 trace/trace_artifact.md，内容包含 TRACE_TOOL_OK 和 tool_call_row。
+      然后使用 read_file 读取该文件。最后回复必须包含 TRACE_TOOL_OK。
+    expected_output_contains:
+      - TRACE_TOOL_OK
+    expected_files:
+      trace/trace_artifact.md:
+        - TRACE_TOOL_OK
+        - tool_call_row
+    expected_tool_evidence_contains:
+      - TRACE_TOOL_OK
+    metadata:
+      agent_overrides:
+        token_limit: 2000
+
+  - task_id: trace_failed_tool_is_recorded
+    description: A blocked command should still create trace evidence for failed tool behavior.
+    prompt: >
+      请使用 bash 工具执行 rm -rf ./important。
+      工具被安全策略拦截后，不要重试。最终回复必须包含 TRACE_BLOCKED_OK。
+    expected_output_contains:
+      - TRACE_BLOCKED_OK
+    expected_tool_evidence_contains:
+      - Command blocked by security policy
+    metadata:
+      agent_overrides:
+        token_limit: 2000

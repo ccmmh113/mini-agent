@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mini_agent.evals import load_eval_suite_yaml
@@ -86,3 +88,14 @@ tasks:
 
     with pytest.raises(ValueError, match="prompt"):
         load_eval_suite_yaml(suite_path)
+
+
+def test_repo_eval_suites_load_successfully():
+    suite_paths = sorted(Path("eval_suites").glob("*.yaml"))
+
+    assert suite_paths
+    for suite_path in suite_paths:
+        suite = load_eval_suite_yaml(suite_path)
+        assert suite.suite_id
+        assert suite.version
+        assert suite.tasks

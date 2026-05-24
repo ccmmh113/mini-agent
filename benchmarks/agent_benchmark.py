@@ -541,6 +541,8 @@ class RealBenchmarkCase:
     expect_tool_messages_contain: list[str] = field(default_factory=list)
     max_steps: int = 8
     token_limit: int | None = None
+    enable_checkpoint: bool = False
+    enable_task_memory: bool = False
 
 
 @dataclass(frozen=True)
@@ -764,6 +766,13 @@ def _task_token_limit(task: EvalTask) -> int | None:
     return value if value > 0 else None
 
 
+def _task_agent_override_bool(task: EvalTask, key: str) -> bool:
+    overrides = task.metadata.get("agent_overrides")
+    if not isinstance(overrides, dict):
+        return False
+    return bool(overrides.get(key, False))
+
+
 def _task_fixtures(task: EvalTask) -> dict[str, str]:
     raw_fixtures = task.metadata.get("fixtures")
     if not isinstance(raw_fixtures, dict):
@@ -787,6 +796,8 @@ def _real_cases_from_suite(suite: EvalSuite) -> list[RealBenchmarkCase]:
             expect_tool_messages_contain=list(task.expected_tool_evidence_contains),
             max_steps=_task_max_steps(task),
             token_limit=_task_token_limit(task),
+            enable_checkpoint=_task_agent_override_bool(task, "enable_checkpoint"),
+            enable_task_memory=_task_agent_override_bool(task, "enable_task_memory"),
         )
         for task in suite.tasks
     ]
@@ -833,6 +844,20 @@ async def run_real_case(
         workspace_dir=str(workspace),
         max_steps=case.max_steps,
         token_limit=case.token_limit or config.agent.token_limit,
+        checkpoint_store=(
+            CheckpointStore(workspace / ".mini_agent" / "checkpoints")
+            if case.enable_checkpoint
+            else None
+        ),
+        task_memory_hook=(
+            TaskMemoryHook(
+                memory_file=str(workspace / ".mini_agent" / "task_memory.json"),
+                workspace_dir=str(workspace),
+                episode_memory_file=str(workspace / ".mini_agent" / "episodes.jsonl"),
+            )
+            if case.enable_task_memory
+            else None
+        ),
         token_pricing=config.llm.token_pricing,
         preserve_thinking=config.llm.preserve_thinking,
         show_thinking=False,

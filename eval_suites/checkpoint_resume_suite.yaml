@@ -1,0 +1,49 @@
+suite_id: mini-agent-checkpoint-resume
+name: Mini Agent Checkpoint And Resume Evaluation
+version: v1
+description: >
+  Module-level suite for checkpoint persistence. These cases verify that
+  checkpoint files are produced and contain restorable completed-state context.
+metadata:
+  module: checkpoint
+tasks:
+  - task_id: checkpoint_records_completed_run
+    description: A completed run should save latest checkpoint with completed reason.
+    prompt: >
+      请使用 write_file 创建 checkpoint/result.md，内容包含 CHECKPOINT_OK 和 resume-ready。
+      完成后回复必须包含 CHECKPOINT_OK。
+    expected_output_contains:
+      - CHECKPOINT_OK
+    expected_files:
+      checkpoint/result.md:
+        - CHECKPOINT_OK
+        - resume-ready
+      .mini_agent/checkpoints/latest.json:
+        - '"reason": "completed"'
+        - CHECKPOINT_OK
+        - write_file
+    metadata:
+      agent_overrides:
+        enable_checkpoint: true
+        token_limit: 2000
+
+  - task_id: checkpoint_preserves_current_goal_after_tools
+    description: Checkpoint content should include the active user goal and final assistant response.
+    prompt: >
+      当前任务标识是 CHECKPOINT_GOAL_SENTINEL。
+      请创建 checkpoint/goal.md，内容包含 CHECKPOINT_GOAL_SENTINEL 和 CURRENT_GOAL_PRESERVED。
+      完成后回复必须包含 CURRENT_GOAL_PRESERVED。
+    expected_output_contains:
+      - CURRENT_GOAL_PRESERVED
+    expected_files:
+      checkpoint/goal.md:
+        - CHECKPOINT_GOAL_SENTINEL
+        - CURRENT_GOAL_PRESERVED
+      .mini_agent/checkpoints/latest.json:
+        - CHECKPOINT_GOAL_SENTINEL
+        - CURRENT_GOAL_PRESERVED
+        - '"reason": "completed"'
+    metadata:
+      agent_overrides:
+        enable_checkpoint: true
+        token_limit: 2000

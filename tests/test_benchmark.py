@@ -333,3 +333,57 @@ async def test_real_eval_benchmark_converts_suite_fixtures_and_token_limit(tmp_p
     assert report.failed == 0
     assert report.results[0].score.breakdown["metadata_contains"] is True
     assert report.results[0].metadata["context_governance"]["token_limit"] == 900
+
+
+@pytest.mark.asyncio
+async def test_real_eval_benchmark_enables_checkpoint_and_task_memory_from_suite(tmp_path, monkeypatch):
+    gpt_config = tmp_path / "gpt.yaml"
+    _write_candidate_config(gpt_config, provider="openai", model="gpt-4o")
+    candidates = load_real_eval_candidates([f"gpt={gpt_config}"])
+    suite = EvalSuite(
+        suite_id="stateful",
+        name="Stateful Runtime",
+        version="1",
+        tasks=[
+            EvalTask(
+                task_id="stateful-task",
+                prompt="Create memory-output.md containing STATEFUL_OK.",
+                expected_output_contains=["STATEFUL_OK"],
+                expected_files={
+                    "memory-output.md": ["STATEFUL_OK"],
+                    ".mini_agent/checkpoints/latest.json": ['"reason": "completed"'],
+                    ".mini_agent/task_memory.json": ['"status": "completed"', "memory-output.md"],
+                    ".mini_agent/episodes.jsonl": ["STATEFUL_OK"],
+                },
+                metadata={
+                    "agent_overrides": {
+                        "enable_checkpoint": True,
+                        "enable_task_memory": True,
+                    },
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "benchmarks.agent_benchmark._build_real_llm",
+        lambda config: ScriptedLLM(
+            [
+                ScriptedResponse(
+                    tool_name="write_file",
+                    arguments={"path": "memory-output.md", "content": "STATEFUL_OK\n"},
+                    prompt_tokens=10,
+                    completion_tokens=2,
+                ),
+                ScriptedResponse(content="STATEFUL_OK", prompt_tokens=8, completion_tokens=2),
+            ]
+        ),
+    )
+
+    report = await run_real_eval_benchmark(
+        candidates=candidates,
+        output_root=tmp_path / "outputs",
+        suite=suite,
+    )
+
+    assert report.failed == 0
+    assert report.results[0].score.breakdown["file_contains"] is True

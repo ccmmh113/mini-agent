@@ -1,0 +1,52 @@
+suite_id: mini-agent-task-memory
+name: Mini Agent Task Memory Evaluation
+version: v1
+description: >
+  Module-level suite for structured task memory and episode recording.
+metadata:
+  module: task_memory
+tasks:
+  - task_id: task_memory_records_file_artifact
+    description: File tool side effects should be recorded as task memory artifacts.
+    prompt: >
+      请使用 write_file 创建 memory/memory_artifact.md。
+      文件必须包含 MEMORY_ARTIFACT_OK 和 artifact-recorded。
+      完成后回复必须包含 MEMORY_ARTIFACT_OK。
+    expected_output_contains:
+      - MEMORY_ARTIFACT_OK
+    expected_files:
+      memory/memory_artifact.md:
+        - MEMORY_ARTIFACT_OK
+        - artifact-recorded
+      .mini_agent/task_memory.json:
+        - '"status": "completed"'
+        - memory_artifact.md
+        - file_written
+      .mini_agent/episodes.jsonl:
+        - MEMORY_ARTIFACT_OK
+        - memory_artifact.md
+    metadata:
+      agent_overrides:
+        enable_task_memory: true
+        token_limit: 2000
+
+  - task_id: task_memory_records_command_artifact
+    description: Bash tool execution should be recorded in task memory as a command artifact.
+    prompt: >
+      请使用 bash 工具执行 echo MEMORY_COMMAND_OK。
+      然后回复必须包含 MEMORY_COMMAND_OK。
+    expected_output_contains:
+      - MEMORY_COMMAND_OK
+    expected_tool_evidence_contains:
+      - MEMORY_COMMAND_OK
+    expected_files:
+      .mini_agent/task_memory.json:
+        - '"status": "completed"'
+        - MEMORY_COMMAND_OK
+        - command
+      .mini_agent/episodes.jsonl:
+        - MEMORY_COMMAND_OK
+    metadata:
+      agent_overrides:
+        enable_task_memory: true
+        token_limit: 2000

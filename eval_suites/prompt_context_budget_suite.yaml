@@ -1,0 +1,103 @@
+suite_id: mini-agent-prompt-context-budget
+name: Mini Agent Prompt Context Budget Evaluation
+version: v1
+description: >
+  Module-level suite for prompt/context budget behavior. These tasks force low
+  token limits and check that current task instructions and workspace evidence
+  survive context pressure.
+metadata:
+  module: prompt_context_budget
+tasks:
+  - task_id: current_task_survives_budget_pressure
+    description: Latest user instruction should survive long fixture context and low budget.
+    prompt: >
+      请读取 prompt/old_context.md。该文件包含旧目标和大量干扰文本。
+      当前任务要求创建 prompt/current_result.md，文件必须包含 PROMPT_BUDGET_OK、
+      CURRENT_CONTEXT_WINS、LATEST_USER_GOAL。文件和最终回复都不能包含 OLD_CONTEXT_WINS。
+      最终回复必须包含 PROMPT_BUDGET_OK。
+    expected_output_contains:
+      - PROMPT_BUDGET_OK
+    expected_files:
+      prompt/current_result.md:
+        - PROMPT_BUDGET_OK
+        - CURRENT_CONTEXT_WINS
+        - LATEST_USER_GOAL
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - output_excludes
+      - file_excludes
+      - metadata_contains
+    metadata:
+      expected_output_not_contains:
+        - OLD_CONTEXT_WINS
+      expected_files_not_contains:
+        prompt/current_result.md:
+          - OLD_CONTEXT_WINS
+      expected_metadata_contains:
+        context_governance.compression_triggered: true
+        context_governance.token_limit: 1100
+      agent_overrides:
+        token_limit: 1100
+      fixtures:
+        prompt/old_context.md: |
+          OLD_CONTEXT_WINS
+          This is stale context and must not become the final answer.
+          Prompt pressure line 01: stale stale stale stale stale stale.
+          Prompt pressure line 02: stale stale stale stale stale stale.
+          Prompt pressure line 03: stale stale stale stale stale stale.
+          Prompt pressure line 04: stale stale stale stale stale stale.
+          Prompt pressure line 05: stale stale stale stale stale stale.
+          Prompt pressure line 06: stale stale stale stale stale stale.
+          Prompt pressure line 07: stale stale stale stale stale stale.
+          Prompt pressure line 08: stale stale stale stale stale stale.
+          Prompt pressure line 09: stale stale stale stale stale stale.
+          Prompt pressure line 10: stale stale stale stale stale stale.
+          Prompt pressure line 11: stale stale stale stale stale stale.
+          Prompt pressure line 12: stale stale stale stale stale stale.
+          Prompt pressure line 13: stale stale stale stale stale stale.
+          Prompt pressure line 14: stale stale stale stale stale stale.
+          Prompt pressure line 15: stale stale stale stale stale stale.
+
+  - task_id: evidence_layer_survives_budget_pressure
+    description: Workspace evidence should be preferred over compressed memory.
+    prompt: >
+      请读取 prompt/evidence.md。
+      然后创建 prompt/evidence_result.md，必须包含 EVIDENCE_LAYER_OK、
+      BUDGET_FACT=workspace-evidence、BUDGET_FACT=current-task。
+      最终回复必须包含 EVIDENCE_LAYER_OK。
+    expected_output_contains:
+      - EVIDENCE_LAYER_OK
+    expected_files:
+      prompt/evidence_result.md:
+        - EVIDENCE_LAYER_OK
+        - BUDGET_FACT=workspace-evidence
+        - BUDGET_FACT=current-task
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - metadata_contains
+    metadata:
+      expected_metadata_contains:
+        context_governance.compression_triggered: true
+        context_governance.token_limit: 1100
+      agent_overrides:
+        token_limit: 1100
+      fixtures:
+        prompt/evidence.md: |
+          BUDGET_FACT=workspace-evidence
+          BUDGET_FACT=current-task
+          Long evidence distractor 01: alpha beta gamma delta epsilon.
+          Long evidence distractor 02: alpha beta gamma delta epsilon.
+          Long evidence distractor 03: alpha beta gamma delta epsilon.
+          Long evidence distractor 04: alpha beta gamma delta epsilon.
+          Long evidence distractor 05: alpha beta gamma delta epsilon.
+          Long evidence distractor 06: alpha beta gamma delta epsilon.
+          Long evidence distractor 07: alpha beta gamma delta epsilon.
+          Long evidence distractor 08: alpha beta gamma delta epsilon.
+          Long evidence distractor 09: alpha beta gamma delta epsilon.
+          Long evidence distractor 10: alpha beta gamma delta epsilon.
+          Long evidence distractor 11: alpha beta gamma delta epsilon.
+          Long evidence distractor 12: alpha beta gamma delta epsilon.
