@@ -265,3 +265,71 @@ async def test_real_eval_benchmark_uses_custom_suite_and_persists_metrics(tmp_pa
     assert report.results[0].task_id == "custom-task"
     assert report.metadata["metrics"]["latency_ms"]["avg"] == 123
     assert loaded.metadata["metrics"]["tokens"]["total"] == 15
+
+
+@pytest.mark.asyncio
+async def test_real_eval_benchmark_converts_suite_fixtures_and_token_limit(tmp_path):
+    gpt_config = tmp_path / "gpt.yaml"
+    _write_candidate_config(gpt_config, provider="openai", model="gpt-4o")
+    candidates = load_real_eval_candidates([f"gpt={gpt_config}"])
+    suite = EvalSuite(
+        suite_id="context",
+        name="Context Governance",
+        version="1",
+        tasks=[
+            EvalTask(
+                task_id="context-task",
+                prompt="Read fixture and report.",
+                expected_output_contains=["ok"],
+                scorers=["status", "output_contains", "metadata_contains"],
+                metadata={
+                    "fixtures": {"fixtures/source.md": "fixture sentinel"},
+                    "agent_overrides": {"token_limit": 900},
+                    "expected_metadata_contains": {
+                        "context_governance.compression_triggered": True,
+                        "context_governance.token_limit": 900,
+                    },
+                },
+            )
+        ],
+    )
+
+    async def fake_runner(case: RealBenchmarkCase, candidate: RealEvalCandidate, output_root, trace_recorder):
+        del candidate, output_root, trace_recorder
+        assert case.files == {"fixtures/source.md": "fixture sentinel"}
+        assert case.token_limit == 900
+        return {
+            "name": case.name,
+            "description": case.description,
+            "passed": True,
+            "checks": {"output_contains": True, "completed": True},
+            "status": "completed",
+            "agent_run_id": "run-context",
+            "workspace_files": {},
+            "tool_evidence": [],
+            "elapsed_ms": 20,
+            "llm_calls": 1,
+            "tool_messages": 0,
+            "message_count": 3,
+            "tokens": {"prompt": 10, "completion": 2, "total": 12, "cached": 0, "cache_write": 0},
+            "cost": {"total_cost": 0.01, "currency": "USD"},
+            "metadata": {
+                "context_governance": {
+                    "compression_triggered": True,
+                    "compression_markers": ["context_snip"],
+                    "token_limit": 900,
+                }
+            },
+            "output": "ok",
+        }
+
+    report = await run_real_eval_benchmark(
+        candidates=candidates,
+        output_root=tmp_path / "outputs",
+        suite=suite,
+        case_runner=fake_runner,
+    )
+
+    assert report.failed == 0
+    assert report.results[0].score.breakdown["metadata_contains"] is True
+    assert report.results[0].metadata["context_governance"]["token_limit"] == 900

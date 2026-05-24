@@ -37,7 +37,7 @@ from mini_agent.llm import LLMClient
 from mini_agent.observability import SQLiteTraceStore, StoreTraceRecorder, TraceRecorder
 from mini_agent.schema import FunctionCall, LLMResponse, Message, TokenUsage, ToolCall
 from mini_agent.schema import LLMProvider
-from mini_agent.summarizer import is_context_snip_message, is_harness_summary_message
+from mini_agent.summarizer import is_context_collapse_message, is_context_snip_message, is_harness_summary_message
 from mini_agent.tools import BashTool, EditTool, ReadTool, WriteTool
 from mini_agent.tools.task_memory_tool import TaskMemoryHook
 
@@ -540,6 +540,7 @@ class RealBenchmarkCase:
     expect_files: dict[str, list[str]] = field(default_factory=dict)
     expect_tool_messages_contain: list[str] = field(default_factory=list)
     max_steps: int = 8
+    token_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -749,16 +750,43 @@ def _task_max_steps(task: EvalTask, default: int = 8) -> int:
     return value if value > 0 else default
 
 
+def _task_token_limit(task: EvalTask) -> int | None:
+    overrides = task.metadata.get("agent_overrides")
+    if not isinstance(overrides, dict):
+        return None
+    raw_value = overrides.get("token_limit")
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _task_fixtures(task: EvalTask) -> dict[str, str]:
+    raw_fixtures = task.metadata.get("fixtures")
+    if not isinstance(raw_fixtures, dict):
+        return {}
+    fixtures: dict[str, str] = {}
+    for path, content in raw_fixtures.items():
+        if isinstance(path, str) and isinstance(content, str):
+            fixtures[path] = content
+    return fixtures
+
+
 def _real_cases_from_suite(suite: EvalSuite) -> list[RealBenchmarkCase]:
     return [
         RealBenchmarkCase(
             name=task.task_id,
             description=task.description,
             task=task.prompt,
+            files=_task_fixtures(task),
             expect_output_contains=list(task.expected_output_contains),
             expect_files=_expected_files_as_needles(task.expected_files),
             expect_tool_messages_contain=list(task.expected_tool_evidence_contains),
             max_steps=_task_max_steps(task),
+            token_limit=_task_token_limit(task),
         )
         for task in suite.tasks
     ]
@@ -804,7 +832,7 @@ async def run_real_case(
         tools=tools,
         workspace_dir=str(workspace),
         max_steps=case.max_steps,
-        token_limit=config.agent.token_limit,
+        token_limit=case.token_limit or config.agent.token_limit,
         token_pricing=config.llm.token_pricing,
         preserve_thinking=config.llm.preserve_thinking,
         show_thinking=False,
@@ -859,8 +887,35 @@ async def run_real_case(
             "cache_write": agent.cumulative_cache_write_tokens,
         },
         "cost": agent.cumulative_token_cost.model_dump(mode="json"),
+        "metadata": {
+            "context_governance": _context_governance_metadata(agent, token_limit=case.token_limit or config.agent.token_limit)
+        },
         "output": output,
         "workspace": str(workspace),
+    }
+
+
+def _context_governance_metadata(agent: Agent, *, token_limit: int) -> dict[str, Any]:
+    markers: list[str] = []
+    if any(is_context_snip_message(message) for message in agent.messages):
+        markers.append("context_snip")
+    if any(is_context_collapse_message(message) for message in agent.messages):
+        markers.append("context_collapse")
+    if any(is_harness_summary_message(message) for message in agent.messages):
+        markers.append("harness_summary")
+
+    message_text = "\n".join(str(message.content) for message in agent.messages if isinstance(message.content, str))
+    if "[Tool result stored on disk:" in message_text:
+        markers.append("tool_result_spill")
+    if "[Old tool result content shortened:" in message_text:
+        markers.append("micro_compact")
+
+    markers = list(dict.fromkeys(markers))
+    return {
+        "compression_triggered": bool(markers),
+        "compression_markers": markers,
+        "token_limit": token_limit,
+        "final_message_count": len(agent.messages),
     }
 
 
@@ -908,6 +963,7 @@ async def run_real_eval_benchmark(
         result = await runner(case_by_id[task.task_id], real_by_id[candidate.candidate_id], output_root, trace_recorder)
         tokens = result["tokens"]
         cost = result.get("cost", {})
+        result_metadata = dict(result.get("metadata", {}))
         return EvalExecution(
             output=result["output"],
             status=result["status"],
@@ -921,6 +977,7 @@ async def run_real_eval_benchmark(
             total_cost=cost.get("total_cost", 0.0),
             currency=cost.get("currency", "USD"),
             metadata={
+                **result_metadata,
                 "legacy_checks": result["checks"],
                 "legacy_passed": result["passed"],
                 "description": result["description"],
