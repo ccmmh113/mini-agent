@@ -16,6 +16,10 @@ Mini Agent 是一个面向本地项目工作的 CLI Agent harness。它负责把
 - 任务完成 episode 记录：`.mini_agent/episodes.jsonl`
 - 分层 prompt 拼装与 10000 token 默认预算
 - 分层上下文压缩：工具结果预算、Snip、Micro-Compact、Context Collapse 和摘要 fallback
+- SQLite Trace：记录 agent run、LLM call、tool call 和 terminal state
+- 标准化 Eval：YAML suite、`EvalRunReport`、SQLite 持久化和 Markdown 报告
+- 真实多模型 benchmark：支持 GPT、DeepSeek、Claude 等候选模型对比
+- Memory A/B 对照：支持 `memory-on` 与 `memory-off` 对照评测
 - 可选 Subagent：通过 `task` 工具把局部任务委派给隔离子 Agent
 - 可选 Skills 与 MCP 工具加载
 
@@ -132,6 +136,63 @@ mini-agent --task "修复测试失败"
 - `/log`：查看日志目录
 - `/log <file>`：查看指定日志
 - `/exit`：退出
+
+## 评测与可观测性
+
+Mini Agent 内置标准化 eval runtime，用来评估 Agent 的工具调用、上下文治理、安全策略、任务记忆、checkpoint 和 trace 链路。
+
+核心能力：
+
+- `eval_suites/*.yaml`：用 YAML 配置评测任务、fixtures、scorers、agent overrides 和期望输出。
+- `EvalRunReport`：每轮评测统一产出结构化报告，包含 candidate、task、score、tokens、cost、duration、metadata。
+- SQLite 持久化：`eval_results` 与 trace SQLite 的 `agent_run_id` 打通，可回溯每个 eval result 对应的 agent run、LLM call 和 tool call。
+- Markdown 报告：可从 SQLite 导出可读报告，用于对比模型、分析失败 case 和汇总指标。
+- Memory baseline：`--memory-baseline` 会为每个候选额外运行 `*-memory-off` 对照组，量化记忆模块对成功率、`read_file` 调用次数和 token 消耗的影响。
+
+运行真实模型评测示例：
+
+```powershell
+uv run python -m mini_agent.cli eval run `
+  --real `
+  --suite eval_suites\task_memory_suite.yaml `
+  --candidate gpt=configs\gpt.yaml `
+  --candidate deepseek=configs\deepseek.yaml `
+  --candidate claude=configs\claude.yaml `
+  --db outputs\task-memory.sqlite3 `
+  --output-root outputs\task-memory
+```
+
+开启 memory-on/off 对照：
+
+```powershell
+uv run python -m mini_agent.cli eval run `
+  --real `
+  --memory-baseline `
+  --suite eval_suites\task_memory_suite.yaml `
+  --candidate gpt=configs\gpt.yaml `
+  --candidate deepseek=configs\deepseek.yaml `
+  --candidate claude=configs\claude.yaml `
+  --db outputs\task-memory-baseline.sqlite3 `
+  --output-root outputs\task-memory-baseline
+```
+
+导出 Markdown 报告：
+
+```powershell
+uv run python -m mini_agent.cli eval report `
+  --db outputs\task-memory-baseline.sqlite3 `
+  > outputs\task-memory-baseline.md
+```
+
+当前重点 suite：
+
+- `context_governance_suite.yaml`：验证上下文压缩、needle 保真、旧上下文覆盖和多步状态保持。
+- `security_policy_suite.yaml`：验证 Bash 安全策略、危险命令拦截和工具边界。
+- `task_memory_suite.yaml`：验证长期记忆召回、跨任务延续、旧记忆防误用、相似记忆抗噪声和重复读取规避。
+- `comprehensive_agent_suite.yaml`：综合覆盖文件读写、工具调用、上下文、记忆和安全策略。
+- `observability_trace_suite.yaml`：验证 eval result 与 trace SQLite 的链路关联。
+
+报告指标包括通过率、P50/P95 延迟、平均 token、LLM/tool 调用次数、trace linkage、压缩触发率、平均压缩率、`recall_notes` 使用率、冗余读取规避率、`read_file` 减少次数和 token 降幅。
 
 ## 任务执行流程
 
@@ -337,6 +398,10 @@ uv run python -m py_compile mini_agent/agent.py mini_agent/cli.py mini_agent/con
 - `mini_agent/runtime.py`：ToolRuntime、policy、observer
 - `mini_agent/tool_registry.py`：工具注册与可选扩展加载
 - `mini_agent/config.py`：配置模型和 YAML 解析
+- `mini_agent/observability/`：agent run、LLM call、tool call 的 trace event 和 SQLite 存储
+- `mini_agent/evals/`：eval spec、runner、scorers、metrics、reporting 和 SQLite store
+- `eval_suites/`：上下文治理、安全策略、任务记忆、checkpoint、trace 和综合评测 YAML
+- `benchmarks/agent_benchmark.py`：deterministic benchmark 与真实多模型 eval runner
 
 
 LLM request:
