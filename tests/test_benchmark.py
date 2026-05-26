@@ -127,6 +127,15 @@ def test_build_real_llm_converts_loaded_retry_config_to_runtime_retry_config(tmp
     assert llm._client.retry_config.retryable_exceptions == (Exception,)
 
 
+def test_real_eval_tools_include_long_term_memory_tools(tmp_path):
+    from benchmarks import agent_benchmark
+
+    tool_names = [tool.name for tool in agent_benchmark._real_tools_for_workspace(tmp_path)]
+
+    assert "record_note" in tool_names
+    assert "recall_notes" in tool_names
+
+
 @pytest.mark.asyncio
 async def test_real_eval_benchmark_runs_each_case_for_each_candidate_with_fake_runner(tmp_path):
     gpt_config = tmp_path / "gpt.yaml"

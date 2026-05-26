@@ -221,3 +221,25 @@ def test_file_excludes_scorer_checks_artifacts_for_stale_marker():
     assert score.passed is False
     assert score.breakdown["file_excludes"] is False
     assert score.failure_reasons == ["file decision.md contains forbidden fragment: STALE_OUTCOME"]
+
+
+def test_tool_evidence_excludes_scorer_rejects_forbidden_tool_output():
+    task = EvalTask(
+        task_id="memory-avoids-redundant-read",
+        prompt="Use task memory instead of rereading the huge source.",
+        scorers=["tool_evidence_excludes"],
+        metadata={
+            "expected_tool_evidence_not_contains": [
+                "DO_NOT_REREAD_HUGE_SOURCE",
+            ]
+        },
+    )
+    execution = EvalExecution(
+        output="MEMORY_REUSE_OK",
+        tool_evidence=["Read content with DO_NOT_REREAD_HUGE_SOURCE"],
+    )
+
+    score = score_task_result(task, execution)
+
+    assert score.breakdown["tool_evidence_excludes"] is False
+    assert "tool evidence contains forbidden fragment: DO_NOT_REREAD_HUGE_SOURCE" in score.failure_reasons

@@ -50,3 +50,212 @@ tasks:
       agent_overrides:
         enable_task_memory: true
         token_limit: 2000
+
+  - task_id: long_term_memory_recalls_project_decision_under_noise
+    description: Long-term memory should recall the durable project decision instead of nearby noisy files.
+    prompt: >
+      请使用 recall_notes 查找项目评测报告相关的长期记忆，然后创建 memory/eval_policy.md。
+      文件必须包含 MEMORY_DECISION_OK、REPORT_CONTRACT=EvalRunReport、
+      TRACE_STORAGE=SQLite agent_run_id linkage。
+      工作区 docs/noisy-report-policy.md 是干扰信息，不能采用其中的 PRINT_ONLY_REPORT。
+      完成后回复必须包含 MEMORY_DECISION_OK。
+    expected_output_contains:
+      - MEMORY_DECISION_OK
+    expected_tool_evidence_contains:
+      - MEMORY_DECISION_OK
+      - REPORT_CONTRACT=EvalRunReport
+    expected_files:
+      memory/eval_policy.md:
+        - MEMORY_DECISION_OK
+        - REPORT_CONTRACT=EvalRunReport
+        - TRACE_STORAGE=SQLite agent_run_id linkage
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - tool_evidence_contains
+      - file_excludes
+    metadata:
+      fixtures:
+        .memory/eval-report-policy.md: |
+          ---
+          name: eval-report-policy
+          description: Mini Agent eval report policy; recall details before using
+          type: project
+          created_at: 2026-05-20T10:00:00
+          updated_at: 2026-05-20T10:00:00
+          ---
+
+          MEMORY_DECISION_OK
+          REPORT_CONTRACT=EvalRunReport
+          TRACE_STORAGE=SQLite agent_run_id linkage
+          MARKDOWN_REPORT=derive from SQLite metrics
+        docs/noisy-report-policy.md: |
+          # Old Draft
+
+          PRINT_ONLY_REPORT
+          NO_SQLITE_NEEDED
+          DO_NOT_USE_THIS_POLICY
+      expected_files_not_contains:
+        memory/eval_policy.md:
+          - PRINT_ONLY_REPORT
+          - NO_SQLITE_NEEDED
+      agent_overrides:
+        token_limit: 2400
+
+  - task_id: task_memory_reuses_active_state_without_rereading_large_source
+    description: Current task memory should carry key state so the agent avoids rereading a large stale source.
+    prompt: >
+      请不要读取 archive/huge_source.md。
+      直接使用 Current Task Context 里的当前任务状态创建 memory/reuse_result.md。
+      文件必须包含 MEMORY_REUSE_OK、DECISION=prefer-sqlite-trace、
+      NEXT_STEP=export-md-report、ARTIFACT=outputs/context-governance-report.md。
+      完成后回复必须包含 MEMORY_REUSE_OK。
+    expected_output_contains:
+      - MEMORY_REUSE_OK
+    expected_files:
+      memory/reuse_result.md:
+        - MEMORY_REUSE_OK
+        - DECISION=prefer-sqlite-trace
+        - NEXT_STEP=export-md-report
+        - ARTIFACT=outputs/context-governance-report.md
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - tool_evidence_excludes
+    metadata:
+      fixtures:
+        .mini_agent/task_memory.json: |
+          {
+            "active_task_id": "task-memory-reuse",
+            "tasks": [
+              {
+                "task_id": "task-memory-reuse",
+                "goal": "Continue eval reporting work from recorded task state",
+                "task_type": "evaluation",
+                "status": "active",
+                "completed_steps": [
+                  {
+                    "description": "Identified report artifact outputs/context-governance-report.md",
+                    "timestamp": "2026-05-20T10:00:00",
+                    "source": "auto"
+                  }
+                ],
+                "decisions": [
+                  {
+                    "decision": "DECISION=prefer-sqlite-trace",
+                    "timestamp": "2026-05-20T10:01:00",
+                    "reason": "SQLite keeps structured trace linkage"
+                  }
+                ],
+                "artifacts": [
+                  {
+                    "path": "outputs/context-governance-report.md",
+                    "timestamp": "2026-05-20T10:02:00",
+                    "artifact_type": "file_written",
+                    "description": "context governance markdown report",
+                    "tool": "write_file",
+                    "success": true,
+                    "source": "auto"
+                  }
+                ],
+                "open_questions": [],
+                "next_steps": [
+                  {
+                    "description": "NEXT_STEP=export-md-report",
+                    "timestamp": "2026-05-20T10:03:00",
+                    "source": "auto"
+                  }
+                ],
+                "archived_steps_summary": "Archived earlier progress: MEMORY_REUSE_OK requires no large source reread.",
+                "created_at": "2026-05-20T10:00:00",
+                "updated_at": "2026-05-20T10:03:00",
+                "summary": "",
+                "completed_by": null,
+                "source": "auto",
+                "resume_events": []
+              }
+            ]
+          }
+        archive/huge_source.md: |
+          # Huge Stale Source
+
+          DO_NOT_REREAD_HUGE_SOURCE
+          STALE_DECISION=print-only-report
+          This file simulates an expensive archive that should not be reopened when task memory already carries the needed state.
+      expected_tool_evidence_not_contains:
+        - DO_NOT_REREAD_HUGE_SOURCE
+      agent_overrides:
+        enable_task_memory: true
+        token_limit: 2400
+
+  - task_id: task_memory_prefers_latest_instruction_over_stale_memory
+    description: Memory should remain a hint; latest user instruction must override stale remembered facts.
+    prompt: >
+      当前最新要求：模型标识必须写成 claude-opus-4-6，并标记 CURRENT_INSTRUCTION_WINS。
+      长期记忆中可能存在旧模型名，请不要采用旧值。
+      请创建 memory/latest_model.md，内容必须包含 MEMORY_STALE_GUARD_OK、
+      MODEL=claude-opus-4-6、CURRENT_INSTRUCTION_WINS。
+      完成后回复必须包含 MEMORY_STALE_GUARD_OK。
+    expected_output_contains:
+      - MEMORY_STALE_GUARD_OK
+    expected_files:
+      memory/latest_model.md:
+        - MEMORY_STALE_GUARD_OK
+        - MODEL=claude-opus-4-6
+        - CURRENT_INSTRUCTION_WINS
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - file_excludes
+    metadata:
+      fixtures:
+        .memory/stale-model-choice.md: |
+          ---
+          name: stale-model-choice
+          description: Historical model choice; verify against latest user instruction
+          type: project
+          created_at: 2026-04-01T10:00:00
+          updated_at: 2026-04-01T10:00:00
+          ---
+
+          OLD_MEMORY_SHOULD_NOT_WIN
+          MODEL=claude-3
+          This memory is stale and must not override the current user instruction.
+      expected_files_not_contains:
+        memory/latest_model.md:
+          - OLD_MEMORY_SHOULD_NOT_WIN
+          - MODEL=claude-3
+      agent_overrides:
+        token_limit: 2200
+
+  - task_id: task_memory_episode_records_cross_task_summary
+    description: Completed task memory should produce an episode carrying summary, artifacts, and command evidence.
+    prompt: >
+      请执行两个动作：
+      1. 使用 bash 工具执行 echo MEMORY_EPISODE_COMMAND_OK。
+      2. 使用 write_file 创建 memory/episode_result.md，内容包含 MEMORY_EPISODE_OK 和 episode-recorded。
+      完成后回复必须包含 MEMORY_EPISODE_OK。
+    expected_output_contains:
+      - MEMORY_EPISODE_OK
+    expected_tool_evidence_contains:
+      - MEMORY_EPISODE_COMMAND_OK
+    expected_files:
+      memory/episode_result.md:
+        - MEMORY_EPISODE_OK
+        - episode-recorded
+      .mini_agent/task_memory.json:
+        - '"status": "completed"'
+        - MEMORY_EPISODE_COMMAND_OK
+        - episode_result.md
+      .mini_agent/episodes.jsonl:
+        - MEMORY_EPISODE_OK
+        - MEMORY_EPISODE_COMMAND_OK
+        - episode_result.md
+    metadata:
+      max_steps: 8
+      agent_overrides:
+        enable_task_memory: true
+        token_limit: 2400

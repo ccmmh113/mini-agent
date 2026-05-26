@@ -28,6 +28,8 @@ def score_task_result(task: EvalTask, execution: EvalExecution) -> EvalScore:
             passed, reasons = _score_output_excludes(task, execution)
         elif scorer == "file_excludes":
             passed, reasons = _score_file_excludes(task, execution)
+        elif scorer == "tool_evidence_excludes":
+            passed, reasons = _score_tool_evidence_excludes(task, execution)
         else:
             passed, reasons = False, [f"unknown scorer: {scorer}"]
 
@@ -74,6 +76,17 @@ def _score_tool_evidence(task: EvalTask, execution: EvalExecution) -> tuple[bool
     evidence_text = "\n".join(execution.tool_evidence)
     missing = [fragment for fragment in task.expected_tool_evidence_contains if fragment not in evidence_text]
     return _pass_or_fail([f"tool evidence missing fragment: {fragment}" for fragment in missing])
+
+
+def _score_tool_evidence_excludes(task: EvalTask, execution: EvalExecution) -> tuple[bool, list[str]]:
+    forbidden = task.metadata.get("expected_tool_evidence_not_contains")
+    if forbidden is None:
+        return True, []
+    if not isinstance(forbidden, list) or not all(isinstance(item, str) for item in forbidden):
+        return False, ["metadata expected_tool_evidence_not_contains must be a string list"]
+    evidence_text = "\n".join(execution.tool_evidence)
+    found = [fragment for fragment in forbidden if fragment in evidence_text]
+    return _pass_or_fail([f"tool evidence contains forbidden fragment: {fragment}" for fragment in found])
 
 
 def _score_metadata_contains(task: EvalTask, execution: EvalExecution) -> tuple[bool, list[str]]:

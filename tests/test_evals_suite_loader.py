@@ -110,3 +110,25 @@ def test_context_governance_multi_step_state_task_scores_file_artifacts_over_fin
     assert "output_excludes" not in task.scorers
     assert "file_contains" in task.scorers
     assert "file_excludes" in task.scorers
+
+
+def test_task_memory_suite_includes_memory_effectiveness_cases():
+    suite = load_eval_suite_yaml(Path("eval_suites/task_memory_suite.yaml"))
+    task_ids = {task.task_id for task in suite.tasks}
+
+    assert {
+        "task_memory_records_file_artifact",
+        "task_memory_records_command_artifact",
+        "long_term_memory_recalls_project_decision_under_noise",
+        "task_memory_reuses_active_state_without_rereading_large_source",
+        "task_memory_prefers_latest_instruction_over_stale_memory",
+        "task_memory_episode_records_cross_task_summary",
+    }.issubset(task_ids)
+
+    reuse_task = next(
+        task
+        for task in suite.tasks
+        if task.task_id == "task_memory_reuses_active_state_without_rereading_large_source"
+    )
+    assert "tool_evidence_excludes" in reuse_task.scorers
+    assert reuse_task.metadata["expected_tool_evidence_not_contains"] == ["DO_NOT_REREAD_HUGE_SOURCE"]

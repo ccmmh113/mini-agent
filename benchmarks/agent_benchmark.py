@@ -40,6 +40,7 @@ from mini_agent.schema import FunctionCall, LLMResponse, Message, TokenUsage, To
 from mini_agent.schema import LLMProvider
 from mini_agent.summarizer import is_context_collapse_message, is_context_snip_message, is_harness_summary_message
 from mini_agent.tools import BashTool, EditTool, ReadTool, WriteTool
+from mini_agent.tools.note_tool import RecallNoteTool, SessionNoteTool
 from mini_agent.tools.task_memory_tool import TaskMemoryHook
 
 
@@ -749,6 +750,18 @@ def _real_benchmark_suite(cases: list[RealBenchmarkCase] | None = None) -> EvalS
     )
 
 
+def _real_tools_for_workspace(workspace: Path) -> list[Any]:
+    memory_dir = workspace / ".memory"
+    return [
+        ReadTool(workspace_dir=str(workspace)),
+        WriteTool(workspace_dir=str(workspace)),
+        EditTool(workspace_dir=str(workspace)),
+        BashTool(workspace_dir=str(workspace)),
+        SessionNoteTool(memory_dir=str(memory_dir)),
+        RecallNoteTool(memory_dir=str(memory_dir), workspace_dir=str(workspace)),
+    ]
+
+
 def _expected_files_as_needles(expected_files: dict[str, str | list[str]]) -> dict[str, list[str]]:
     return {
         path: [needles] if isinstance(needles, str) else list(needles)
@@ -841,12 +854,7 @@ async def run_real_case(
     _write_fixture_files(workspace, case.files)
 
     llm = _build_real_llm(config)
-    tools = [
-        ReadTool(workspace_dir=str(workspace)),
-        WriteTool(workspace_dir=str(workspace)),
-        EditTool(workspace_dir=str(workspace)),
-        BashTool(workspace_dir=str(workspace)),
-    ]
+    tools = _real_tools_for_workspace(workspace)
     agent = Agent(
         llm_client=llm,
         system_prompt=(
