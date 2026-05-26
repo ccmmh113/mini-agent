@@ -638,6 +638,11 @@ Examples:
         default=None,
         help="YAML eval suite path. Requires --real because arbitrary suites need a real Agent runtime.",
     )
+    eval_run_parser.add_argument(
+        "--memory-baseline",
+        action="store_true",
+        help="For real evals, also run each candidate with memory tools disabled for A/B memory metrics.",
+    )
 
     eval_report_parser = eval_subparsers.add_parser("report", help="Print the latest evaluation report")
     eval_report_parser.add_argument(
@@ -689,7 +694,15 @@ def handle_eval_command(args: argparse.Namespace) -> int:
                 if args.output_root
                 else Path("outputs") / "evals" / datetime.now().strftime("%Y%m%d-%H%M%S")
             )
-            report = asyncio.run(run_real_eval_benchmark(candidates, output_root=output_root, db_path=db_path, suite=suite))
+            report = asyncio.run(
+                run_real_eval_benchmark(
+                    candidates,
+                    output_root=output_root,
+                    db_path=db_path,
+                    suite=suite,
+                    enable_memory_baseline=args.memory_baseline,
+                )
+            )
         else:
             from benchmarks.agent_benchmark import run_eval_benchmark
 

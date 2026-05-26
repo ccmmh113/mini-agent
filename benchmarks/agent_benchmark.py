@@ -559,6 +559,8 @@ class RealEvalCandidate:
     config: Config
     config_path: Path | None = None
     label: str | None = None
+    memory_mode: str = "on"
+    baseline_for: str | None = None
 
 
 RealCaseRunner = Callable[
@@ -752,16 +754,22 @@ def _real_benchmark_suite(cases: list[RealBenchmarkCase] | None = None) -> EvalS
     )
 
 
-def _real_tools_for_workspace(workspace: Path) -> list[Any]:
+def _real_tools_for_workspace(workspace: Path, *, enable_memory: bool = True) -> list[Any]:
     memory_dir = workspace / ".memory"
-    return [
+    tools: list[Any] = [
         ReadTool(workspace_dir=str(workspace)),
         WriteTool(workspace_dir=str(workspace)),
         EditTool(workspace_dir=str(workspace)),
         BashTool(workspace_dir=str(workspace)),
-        SessionNoteTool(memory_dir=str(memory_dir)),
-        RecallNoteTool(memory_dir=str(memory_dir), workspace_dir=str(workspace)),
     ]
+    if enable_memory:
+        tools.extend(
+            [
+                SessionNoteTool(memory_dir=str(memory_dir)),
+                RecallNoteTool(memory_dir=str(memory_dir), workspace_dir=str(workspace)),
+            ]
+        )
+    return tools
 
 
 def _expected_files_as_needles(expected_files: dict[str, str | list[str]]) -> dict[str, list[str]]:
@@ -833,15 +841,19 @@ def _real_cases_from_suite(suite: EvalSuite) -> list[RealBenchmarkCase]:
 
 
 def _eval_candidate_from_real(candidate: RealEvalCandidate) -> EvalCandidate:
+    metadata = {
+        "provider": candidate.config.llm.provider,
+        "api_base": candidate.config.llm.api_base,
+        "config_path": str(candidate.config_path) if candidate.config_path is not None else None,
+        "memory_mode": candidate.memory_mode,
+    }
+    if candidate.baseline_for:
+        metadata["baseline_for"] = candidate.baseline_for
     return EvalCandidate(
         candidate_id=candidate.candidate_id,
         model=candidate.config.llm.model,
         label=candidate.label or candidate.candidate_id,
-        metadata={
-            "provider": candidate.config.llm.provider,
-            "api_base": candidate.config.llm.api_base,
-            "config_path": str(candidate.config_path) if candidate.config_path is not None else None,
-        },
+        metadata=metadata,
     )
 
 
@@ -851,13 +863,14 @@ async def run_real_case(
     output_root: Path,
     candidate_id: str = "default",
     trace_recorder: TraceRecorder | None = None,
+    enable_memory: bool = True,
 ) -> dict[str, Any]:
     workspace = output_root / "workspaces" / candidate_id / case.name
     workspace.mkdir(parents=True, exist_ok=True)
-    _write_fixture_files(workspace, case.files)
+    _write_fixture_files(workspace, _case_files_for_memory_mode(case.files, enable_memory=enable_memory))
 
     llm = _build_real_llm(config)
-    tools = _real_tools_for_workspace(workspace)
+    tools = _real_tools_for_workspace(workspace, enable_memory=enable_memory)
     agent = Agent(
         llm_client=llm,
         system_prompt=(
@@ -879,7 +892,7 @@ async def run_real_case(
                 workspace_dir=str(workspace),
                 episode_memory_file=str(workspace / ".mini_agent" / "episodes.jsonl"),
             )
-            if case.enable_task_memory
+            if enable_memory and case.enable_task_memory
             else None
         ),
         token_pricing=config.llm.token_pricing,
@@ -1048,7 +1061,35 @@ async def _run_real_case_for_candidate(
         output_root,
         candidate_id=candidate.candidate_id,
         trace_recorder=trace_recorder,
+        enable_memory=candidate.memory_mode != "off",
     )
+
+
+def _case_files_for_memory_mode(files: dict[str, str], *, enable_memory: bool) -> dict[str, str]:
+    if enable_memory:
+        return dict(files)
+    return {
+        path: content
+        for path, content in files.items()
+        if not path.replace("\\", "/").startswith((".memory/", ".mini_agent/task_memory"))
+    }
+
+
+def _with_memory_baseline_candidates(candidates: list[RealEvalCandidate]) -> list[RealEvalCandidate]:
+    expanded: list[RealEvalCandidate] = []
+    for candidate in candidates:
+        expanded.append(candidate)
+        expanded.append(
+            RealEvalCandidate(
+                candidate_id=f"{candidate.candidate_id}-memory-off",
+                config=candidate.config,
+                config_path=candidate.config_path,
+                label=f"{candidate.label or candidate.candidate_id} memory off",
+                memory_mode="off",
+                baseline_for=candidate.candidate_id,
+            )
+        )
+    return expanded
 
 
 async def run_real_eval_benchmark(
@@ -1059,7 +1100,10 @@ async def run_real_eval_benchmark(
     cases: list[RealBenchmarkCase] | None = None,
     suite: EvalSuite | None = None,
     case_runner: RealCaseRunner | None = None,
+    enable_memory_baseline: bool = False,
 ) -> EvalRunReport:
+    if enable_memory_baseline:
+        candidates = _with_memory_baseline_candidates(candidates)
     if cases is not None:
         selected_cases = cases
     elif suite is not None:

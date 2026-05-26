@@ -149,6 +149,77 @@ def test_compute_eval_metrics_aggregates_latency_cost_tokens_and_failures():
     assert metrics["candidates"]["deepseek"]["max_steps"] == 1
 
 
+def test_compute_eval_metrics_compares_memory_baseline_read_calls():
+    suite = EvalSuite(
+        suite_id="memory-baseline",
+        name="Memory Baseline",
+        version="1",
+        tasks=[EvalTask(task_id="reuse-large-source", prompt="Reuse memory")],
+    )
+    report = EvalRunReport(
+        eval_run_id="eval-1",
+        suite=suite,
+        candidates=[
+            EvalCandidate(candidate_id="gpt", model="gpt-4o"),
+            EvalCandidate(
+                candidate_id="gpt-memory-off",
+                model="gpt-4o",
+                metadata={"baseline_for": "gpt", "memory_mode": "off"},
+            ),
+        ],
+        results=[
+            EvalResult(
+                eval_run_id="eval-1",
+                suite_id=suite.suite_id,
+                suite_version=suite.version,
+                candidate_id="gpt",
+                task_id="reuse-large-source",
+                agent_run_id="run-gpt",
+                passed=True,
+                score=EvalScore(passed=True, score=1, max_score=1),
+                total_tokens=900,
+                metadata={
+                    "memory_effectiveness": {
+                        "read_file_calls": 1,
+                        "recall_notes_calls": 1,
+                        "record_note_calls": 1,
+                    }
+                },
+            ),
+            EvalResult(
+                eval_run_id="eval-1",
+                suite_id=suite.suite_id,
+                suite_version=suite.version,
+                candidate_id="gpt-memory-off",
+                task_id="reuse-large-source",
+                agent_run_id="run-gpt-off",
+                passed=True,
+                score=EvalScore(passed=True, score=1, max_score=1),
+                total_tokens=1500,
+                metadata={
+                    "memory_effectiveness": {
+                        "read_file_calls": 3,
+                        "recall_notes_calls": 0,
+                        "record_note_calls": 0,
+                    }
+                },
+            ),
+        ],
+    )
+
+    metrics = compute_eval_metrics(report)
+
+    baseline = metrics["memory_effectiveness"]["baseline_comparison"]
+    assert baseline["pair_count"] == 1
+    assert baseline["baseline_read_file_calls"] == 3
+    assert baseline["memory_read_file_calls"] == 1
+    assert baseline["read_file_call_delta"] == 2
+    assert baseline["read_file_call_reduction_rate"] == 2 / 3
+    assert baseline["baseline_total_tokens"] == 1500
+    assert baseline["memory_total_tokens"] == 900
+    assert baseline["total_token_delta"] == 600
+
+
 def test_with_eval_metrics_returns_report_with_metrics_metadata():
     report = with_eval_metrics(_metrics_report())
 

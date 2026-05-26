@@ -49,7 +49,7 @@ def compute_eval_metrics(report: EvalRunReport) -> dict[str, Any]:
         "trace_linkage": _trace_linkage_metrics(results),
         "context_governance": _context_governance_metrics(results),
         "observability": _observability_metrics(results),
-        "memory_effectiveness": _memory_effectiveness_metrics(results),
+        "memory_effectiveness": _memory_effectiveness_metrics(results, report.candidates),
         "scorer_failures": _scorer_failures(results),
         "candidates": _candidate_metrics(results),
     }
@@ -139,7 +139,7 @@ def _observability_metrics(results: list[EvalResult]) -> dict[str, Any]:
     }
 
 
-def _memory_effectiveness_metrics(results: list[EvalResult]) -> dict[str, Any]:
+def _memory_effectiveness_metrics(results: list[EvalResult], candidates: list[Any] | None = None) -> dict[str, Any]:
     memories = [
         result.metadata.get("memory_effectiveness")
         for result in results
@@ -178,11 +178,67 @@ def _memory_effectiveness_metrics(results: list[EvalResult]) -> dict[str, Any]:
         "avg_read_file_calls": _avg(read_calls),
         "avg_record_note_calls": _avg(record_calls),
         "avoided_read_token_estimate": int(avoided_tokens),
+        "baseline_comparison": _memory_baseline_comparison(results, candidates or []),
     }
 
 
 def _number(value: Any) -> float | None:
     return value if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _memory_baseline_comparison(results: list[EvalResult], candidates: list[Any]) -> dict[str, Any]:
+    baseline_for: dict[str, str] = {}
+    for candidate in candidates:
+        metadata = getattr(candidate, "metadata", {})
+        if isinstance(metadata, dict) and metadata.get("memory_mode") == "off":
+            candidate_id = getattr(candidate, "candidate_id", "")
+            baseline_for[candidate_id] = str(metadata.get("baseline_for") or _strip_memory_off_suffix(candidate_id))
+
+    for result in results:
+        if result.candidate_id.endswith("-memory-off"):
+            baseline_for.setdefault(result.candidate_id, _strip_memory_off_suffix(result.candidate_id))
+
+    keyed = {(result.candidate_id, result.task_id): result for result in results}
+    pair_count = 0
+    baseline_read_calls = 0
+    memory_read_calls = 0
+    baseline_tokens = 0
+    memory_tokens = 0
+
+    for baseline_id, memory_id in baseline_for.items():
+        for result in results:
+            if result.candidate_id != baseline_id:
+                continue
+            memory_result = keyed.get((memory_id, result.task_id))
+            if memory_result is None:
+                continue
+            baseline_memory = result.metadata.get("memory_effectiveness")
+            active_memory = memory_result.metadata.get("memory_effectiveness")
+            if not isinstance(baseline_memory, dict) or not isinstance(active_memory, dict):
+                continue
+            baseline_read_calls += int(_number(baseline_memory.get("read_file_calls")) or 0)
+            memory_read_calls += int(_number(active_memory.get("read_file_calls")) or 0)
+            baseline_tokens += result.total_tokens
+            memory_tokens += memory_result.total_tokens
+            pair_count += 1
+
+    read_delta = baseline_read_calls - memory_read_calls
+    token_delta = baseline_tokens - memory_tokens
+    return {
+        "pair_count": pair_count,
+        "baseline_read_file_calls": baseline_read_calls,
+        "memory_read_file_calls": memory_read_calls,
+        "read_file_call_delta": read_delta,
+        "read_file_call_reduction_rate": read_delta / baseline_read_calls if baseline_read_calls else 0.0,
+        "baseline_total_tokens": baseline_tokens,
+        "memory_total_tokens": memory_tokens,
+        "total_token_delta": token_delta,
+        "total_token_reduction_rate": token_delta / baseline_tokens if baseline_tokens else 0.0,
+    }
+
+
+def _strip_memory_off_suffix(candidate_id: str) -> str:
+    return candidate_id.removesuffix("-memory-off")
 
 
 def _candidate_metrics(results: list[EvalResult]) -> dict[str, dict[str, Any]]:

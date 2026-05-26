@@ -117,6 +117,7 @@ def _format_metrics_section(metrics: dict) -> list[str]:
     memory = metrics.get("memory_effectiveness", {})
     recall_called = memory.get("recall_notes_called", {}) if isinstance(memory, dict) else {}
     redundant_avoided = memory.get("redundant_read_avoided", {}) if isinstance(memory, dict) else {}
+    baseline = memory.get("baseline_comparison", {}) if isinstance(memory, dict) else {}
     scorer_text = ", ".join(f"{key}={value}" for key, value in scorer_failures.items()) or "none"
     return [
         "## Metrics",
@@ -140,6 +141,19 @@ def _format_metrics_section(metrics: dict) -> list[str]:
         f"- Avg recall_notes calls/task: {float(memory.get('avg_recall_notes_calls', 0.0)):.2f}",
         f"- Avg read_file calls/task: {float(memory.get('avg_read_file_calls', 0.0)):.2f}",
         f"- Avg record_note calls/task: {float(memory.get('avg_record_note_calls', 0.0)):.2f}",
+        f"- Memory baseline pairs: {int(baseline.get('pair_count', 0))}",
+        (
+            f"- Memory read_file reduction: {int(baseline.get('read_file_call_delta', 0))} "
+            f"({int(baseline.get('baseline_read_file_calls', 0))} -> "
+            f"{int(baseline.get('memory_read_file_calls', 0))}, "
+            f"{_format_percent(float(baseline.get('read_file_call_reduction_rate', 0.0)))})"
+        ),
+        (
+            f"- Memory token reduction: {int(baseline.get('total_token_delta', 0))} "
+            f"({int(baseline.get('baseline_total_tokens', 0))} -> "
+            f"{int(baseline.get('memory_total_tokens', 0))}, "
+            f"{_format_percent(float(baseline.get('total_token_reduction_rate', 0.0)))})"
+        ),
         f"- Estimated avoided read tokens: {int(memory.get('avoided_read_token_estimate', 0))}",
         "",
     ]

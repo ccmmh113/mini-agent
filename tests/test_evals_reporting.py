@@ -116,6 +116,17 @@ def test_format_eval_report_includes_metrics_section_when_present():
                     "avg_read_file_calls": 0.5,
                     "avg_record_note_calls": 0.25,
                     "avoided_read_token_estimate": 1200,
+                    "baseline_comparison": {
+                        "pair_count": 3,
+                        "baseline_read_file_calls": 9,
+                        "memory_read_file_calls": 4,
+                        "read_file_call_delta": 5,
+                        "read_file_call_reduction_rate": 5 / 9,
+                        "baseline_total_tokens": 9000,
+                        "memory_total_tokens": 6900,
+                        "total_token_delta": 2100,
+                        "total_token_reduction_rate": 2100 / 9000,
+                    },
                 },
             }
         },
@@ -141,4 +152,7 @@ def test_format_eval_report_includes_metrics_section_when_present():
     assert "- Redundant-read avoided rate: 50.00% (2)" in markdown
     assert "- Avg recall_notes calls/task: 1.50" in markdown
     assert "- Avg read_file calls/task: 0.50" in markdown
+    assert "- Memory baseline pairs: 3" in markdown
+    assert "- Memory read_file reduction: 5 (9 -> 4, 55.56%)" in markdown
+    assert "- Memory token reduction: 2100 (9000 -> 6900, 23.33%)" in markdown
     assert "- Estimated avoided read tokens: 1200" in markdown

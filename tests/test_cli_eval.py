@@ -42,6 +42,7 @@ def test_parse_eval_run_real_candidate_command():
             "outputs/evals",
             "--suite",
             "eval_suites/smoke.yaml",
+            "--memory-baseline",
         ]
     )
 
@@ -55,6 +56,7 @@ def test_parse_eval_run_real_candidate_command():
     ]
     assert args.output_root == "outputs/evals"
     assert args.suite == "eval_suites/smoke.yaml"
+    assert args.memory_baseline is True
 
 
 def test_eval_run_handler_writes_eval_and_trace_tables(tmp_path, capsys):
@@ -124,11 +126,12 @@ tasks:
         captured["specs"] = specs
         return ["loaded-gpt"]
 
-    async def fake_run_real_eval_benchmark(candidates, output_root, db_path, suite=None):
+    async def fake_run_real_eval_benchmark(candidates, output_root, db_path, suite=None, enable_memory_baseline=False):
         captured["candidates"] = candidates
         captured["output_root"] = output_root
         captured["db_path"] = db_path
         captured["suite"] = suite
+        captured["enable_memory_baseline"] = enable_memory_baseline
         return report
 
     monkeypatch.setattr(agent_benchmark, "load_real_eval_candidates", fake_load_real_eval_candidates)
@@ -147,6 +150,7 @@ tasks:
             str(tmp_path / "outputs"),
             "--suite",
             str(suite_yaml),
+            "--memory-baseline",
         ]
     )
 
@@ -156,6 +160,7 @@ tasks:
     assert captured["candidates"] == ["loaded-gpt"]
     assert captured["db_path"] == db_path.absolute()
     assert captured["suite"].suite_key == "custom@v1"
+    assert captured["enable_memory_baseline"] is True
     assert "mini-agent-real-model" in capsys.readouterr().out
 
 

@@ -136,6 +136,17 @@ def test_real_eval_tools_include_long_term_memory_tools(tmp_path):
     assert "recall_notes" in tool_names
 
 
+def test_real_eval_tools_can_disable_memory_tools_for_baseline(tmp_path):
+    from benchmarks import agent_benchmark
+
+    tool_names = [tool.name for tool in agent_benchmark._real_tools_for_workspace(tmp_path, enable_memory=False)]
+
+    assert "read_file" in tool_names
+    assert "write_file" in tool_names
+    assert "record_note" not in tool_names
+    assert "recall_notes" not in tool_names
+
+
 @pytest.mark.asyncio
 async def test_real_eval_benchmark_runs_each_case_for_each_candidate_with_fake_runner(tmp_path):
     gpt_config = tmp_path / "gpt.yaml"
@@ -194,6 +205,65 @@ async def test_real_eval_benchmark_runs_each_case_for_each_candidate_with_fake_r
         "run-claude-real-direct",
     }
     assert EvalSQLiteStore(tmp_path / "evals.sqlite3").load_report(report.eval_run_id).case_count == 3
+
+
+@pytest.mark.asyncio
+async def test_real_eval_benchmark_can_add_memory_disabled_baseline_candidate(tmp_path):
+    gpt_config = tmp_path / "gpt.yaml"
+    _write_candidate_config(gpt_config, provider="openai", model="gpt-4o")
+    candidates = load_real_eval_candidates([f"gpt={gpt_config}"])
+    cases = [
+        RealBenchmarkCase(
+            name="reuse-large-source",
+            description="fake memory case",
+            task="Answer",
+            expect_output_contains=["ok"],
+        )
+    ]
+
+    async def fake_runner(case: RealBenchmarkCase, candidate: RealEvalCandidate, output_root, trace_recorder):
+        del output_root, trace_recorder
+        read_calls = 3 if candidate.memory_mode == "off" else 1
+        return {
+            "name": case.name,
+            "description": case.description,
+            "passed": True,
+            "checks": {"output_contains": True, "completed": True},
+            "status": "completed",
+            "agent_run_id": f"run-{candidate.candidate_id}-{case.name}",
+            "workspace_files": {},
+            "tool_evidence": [],
+            "elapsed_ms": 10,
+            "llm_calls": 1,
+            "tool_messages": read_calls,
+            "message_count": 3 + read_calls,
+            "tokens": {"prompt": 100 * read_calls, "completion": 2, "total": 100 * read_calls + 2, "cached": 0, "cache_write": 0},
+            "cost": {"total_cost": 0.01, "currency": "USD"},
+            "metadata": {
+                "memory_effectiveness": {
+                    "read_file_calls": read_calls,
+                    "recall_notes_calls": 0 if candidate.memory_mode == "off" else 1,
+                    "record_note_calls": 0 if candidate.memory_mode == "off" else 1,
+                }
+            },
+            "output": f"{candidate.candidate_id} ok",
+        }
+
+    report = await run_real_eval_benchmark(
+        candidates=candidates,
+        output_root=tmp_path / "outputs",
+        cases=cases,
+        case_runner=fake_runner,
+        enable_memory_baseline=True,
+    )
+
+    assert [candidate.candidate_id for candidate in report.candidates] == ["gpt", "gpt-memory-off"]
+    assert report.candidates[1].metadata["baseline_for"] == "gpt"
+    assert report.candidates[1].metadata["memory_mode"] == "off"
+    comparison = report.metadata["metrics"]["memory_effectiveness"]["baseline_comparison"]
+    assert comparison["pair_count"] == 1
+    assert comparison["read_file_call_delta"] == 2
+    assert comparison["read_file_call_reduction_rate"] == 2 / 3
 
 
 @pytest.mark.asyncio
