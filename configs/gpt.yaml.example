@@ -1,0 +1,14 @@
+api_key: "replace-with-your-api-key"
+provider: "openai"
+api_base: "https://www.right.codes/codex-pro/v1"
+model: "gpt-5.4"
+
+retry:
+  enabled: true
+  max_retries: 2
+  initial_delay: 1.0
+  max_delay: 8.0
+  exponential_base: 2.0
+
+tools:
+  enable_mcp: false

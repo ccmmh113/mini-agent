@@ -1,0 +1,15 @@
+api_key: "replace-with-your-api-key"
+provider: "openai"
+api_base: "https://www.right.codes/deepseek/v1"
+model: "deepseek-v4-pro"
+preserve_thinking: true
+
+retry:
+  enabled: true
+  max_retries: 2
+  initial_delay: 1.0
+  max_delay: 8.0
+  exponential_base: 2.0
+
+tools:
+  enable_mcp: false
