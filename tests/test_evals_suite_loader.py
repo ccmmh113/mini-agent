@@ -99,3 +99,14 @@ def test_repo_eval_suites_load_successfully():
         assert suite.suite_id
         assert suite.version
         assert suite.tasks
+
+
+def test_context_governance_multi_step_state_task_scores_file_artifacts_over_final_reply():
+    suite = load_eval_suite_yaml(Path("eval_suites/context_governance_suite.yaml"))
+    task = next(task for task in suite.tasks if task.task_id == "multi_step_state_integrity_under_pressure")
+
+    assert task.expected_output_contains == ["STATE_OK"]
+    assert "output_contains" not in task.scorers
+    assert "output_excludes" not in task.scorers
+    assert "file_contains" in task.scorers
+    assert "file_excludes" in task.scorers

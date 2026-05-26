@@ -7,6 +7,7 @@ from benchmarks.agent_benchmark import (
     RealEvalCandidate,
     ScriptedLLM,
     ScriptedResponse,
+    _build_real_llm,
     load_real_eval_candidates,
     run_benchmark,
     run_eval_benchmark,
@@ -113,6 +114,17 @@ def test_load_real_eval_candidates_from_named_config_specs(tmp_path):
         "claude-3-5-sonnet",
     ]
     assert candidates[2].config.llm.provider == "anthropic"
+
+
+def test_build_real_llm_converts_loaded_retry_config_to_runtime_retry_config(tmp_path):
+    config_path = tmp_path / "deepseek.yaml"
+    _write_candidate_config(config_path, provider="openai", model="deepseek-chat")
+    candidate = load_real_eval_candidates([f"deepseek={config_path}"])[0]
+
+    llm = _build_real_llm(candidate.config)
+
+    assert hasattr(llm._client.retry_config, "retryable_exceptions")
+    assert llm._client.retry_config.retryable_exceptions == (Exception,)
 
 
 @pytest.mark.asyncio

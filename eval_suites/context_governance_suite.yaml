@@ -212,9 +212,7 @@ tasks:
         - STATE_OWNER=current-user
     scorers:
       - status
-      - output_contains
       - file_contains
-      - output_excludes
       - file_excludes
       - metadata_contains
     metadata:

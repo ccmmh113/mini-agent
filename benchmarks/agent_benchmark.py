@@ -35,6 +35,7 @@ from mini_agent.evals import (
 )
 from mini_agent.llm import LLMClient
 from mini_agent.observability import SQLiteTraceStore, StoreTraceRecorder, TraceRecorder
+from mini_agent.retry import RetryConfig as RuntimeRetryConfig
 from mini_agent.schema import FunctionCall, LLMResponse, Message, TokenUsage, ToolCall
 from mini_agent.schema import LLMProvider
 from mini_agent.summarizer import is_context_collapse_message, is_context_snip_message, is_harness_summary_message
@@ -704,12 +705,20 @@ def default_real_cases() -> list[RealBenchmarkCase]:
 
 
 def _build_real_llm(config: Config) -> LLMClient:
+    retry_config = RuntimeRetryConfig(
+        enabled=config.llm.retry.enabled,
+        max_retries=config.llm.retry.max_retries,
+        initial_delay=config.llm.retry.initial_delay,
+        max_delay=config.llm.retry.max_delay,
+        exponential_base=config.llm.retry.exponential_base,
+        retryable_exceptions=(Exception,),
+    )
     return LLMClient(
         api_key=config.llm.api_key,
         provider=LLMProvider(config.llm.provider),
         api_base=config.llm.api_base,
         model=config.llm.model,
-        retry_config=config.llm.retry,
+        retry_config=retry_config if config.llm.retry.enabled else None,
         openai_prompt_cache_key=config.llm.openai_prompt_cache_key,
         openai_prompt_cache_retention=config.llm.openai_prompt_cache_retention,
         disable_thinking=config.llm.disable_thinking,
