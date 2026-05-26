@@ -660,6 +660,7 @@ class CompressionPipeline:
         self.renderer = renderer or AgentConsoleRenderer()
         self.near_limit_ratio = near_limit_ratio
         self.hard_limit_ratio = hard_limit_ratio
+        self.stats: list[dict[str, Any]] = []
 
     async def compress_before_request(
         self,
@@ -672,12 +673,28 @@ class CompressionPipeline:
 
         estimated_tokens = self._estimate_request_tokens(messages, tools)
         if estimated_tokens <= int(self.token_limit * self.near_limit_ratio):
+            self._record_stats(
+                compression_triggered=False,
+                stage="none",
+                before_messages=messages,
+                after_messages=messages,
+                before_tokens=estimated_tokens,
+                after_tokens=estimated_tokens,
+            )
             return messages
 
         compaction = self.compactor.compact(messages)
         compacted_messages = compaction.messages
         compacted_estimate = self._estimate_request_tokens(compacted_messages, tools)
         if compacted_estimate <= int(self.token_limit * self.hard_limit_ratio):
+            self._record_stats(
+                compression_triggered=True,
+                stage="compaction",
+                before_messages=messages,
+                after_messages=compacted_messages,
+                before_tokens=estimated_tokens,
+                after_tokens=compacted_estimate,
+            )
             return compacted_messages
 
         collapse = self.context_collapser.apply_collapses_if_needed(
@@ -687,6 +704,14 @@ class CompressionPipeline:
         collapsed_messages = collapse.messages
         collapsed_estimate = self._estimate_request_tokens(collapsed_messages, tools)
         if collapsed_estimate <= int(self.token_limit * self.hard_limit_ratio):
+            self._record_stats(
+                compression_triggered=True,
+                stage="collapse",
+                before_messages=messages,
+                after_messages=collapsed_messages,
+                before_tokens=estimated_tokens,
+                after_tokens=collapsed_estimate,
+            )
             return collapsed_messages
 
         budget_messages = self.request_context_builder.build(
@@ -694,12 +719,22 @@ class CompressionPipeline:
             tools=tools,
             token_budget=self.token_limit,
         )
-        return await self.summarizer.summarize_if_needed(
+        summarized_messages = await self.summarizer.summarize_if_needed(
             collapsed_messages,
             api_total_tokens,
             budget_messages=budget_messages,
             tools=tools,
         )
+        summarized_estimate = self._estimate_request_tokens(summarized_messages, tools)
+        self._record_stats(
+            compression_triggered=True,
+            stage="summarization",
+            before_messages=messages,
+            after_messages=summarized_messages,
+            before_tokens=estimated_tokens,
+            after_tokens=summarized_estimate,
+        )
+        return summarized_messages
 
     def _estimate_request_tokens(self, messages: list[Message], tools: list[object] | None) -> int:
         request_messages = self.request_context_builder.build(
@@ -708,6 +743,29 @@ class CompressionPipeline:
             token_budget=self.token_limit,
         )
         return estimate_messages_tokens(request_messages) + estimate_request_tool_tokens(tools)
+
+    def _record_stats(
+        self,
+        *,
+        compression_triggered: bool,
+        stage: str,
+        before_messages: list[Message],
+        after_messages: list[Message],
+        before_tokens: int,
+        after_tokens: int,
+    ) -> None:
+        ratio = 0.0 if before_tokens <= 0 else max(0.0, 1.0 - (after_tokens / before_tokens))
+        self.stats.append(
+            {
+                "compression_triggered": compression_triggered,
+                "stage": stage,
+                "before_tokens": before_tokens,
+                "after_tokens": after_tokens,
+                "compression_ratio": ratio,
+                "before_message_count": len(before_messages),
+                "after_message_count": len(after_messages),
+            }
+        )
 
 
 class MessageSummarizer:

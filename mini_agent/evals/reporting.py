@@ -110,6 +110,10 @@ def _format_metrics_section(metrics: dict) -> list[str]:
     max_steps = metrics.get("max_steps", {})
     tool_failures = metrics.get("tool_evidence_failures", {})
     scorer_failures = metrics.get("scorer_failures", {})
+    trace_linkage = metrics.get("trace_linkage", {})
+    context = metrics.get("context_governance", {})
+    compression_triggered = context.get("compression_triggered", {}) if isinstance(context, dict) else {}
+    observability = metrics.get("observability", {})
     scorer_text = ", ".join(f"{key}={value}" for key, value in scorer_failures.items()) or "none"
     return [
         "## Metrics",
@@ -122,6 +126,12 @@ def _format_metrics_section(metrics: dict) -> list[str]:
         f"- Max-step rate: {_format_percent(float(max_steps.get('rate', 0.0)))} ({int(max_steps.get('count', 0))})",
         f"- Tool-evidence failure rate: {_format_percent(float(tool_failures.get('rate', 0.0)))} ({int(tool_failures.get('count', 0))})",
         f"- Scorer failures: {scorer_text}",
+        f"- Trace linkage rate: {_format_percent(float(trace_linkage.get('rate', 0.0)))} ({int(trace_linkage.get('count', 0))})",
+        f"- Compression trigger rate: {_format_percent(float(compression_triggered.get('rate', 0.0)))} ({int(compression_triggered.get('count', 0))})",
+        f"- Avg compression ratio: {_format_percent(float(context.get('avg_compression_ratio', 0.0)))}",
+        f"- Avg compression tokens: {float(context.get('avg_tokens_before_compression', 0.0)):.2f} -> {float(context.get('avg_tokens_after_compression', 0.0)):.2f}",
+        f"- Avg LLM calls/task: {float(observability.get('avg_llm_calls', 0.0)):.2f}",
+        f"- Avg tool calls/task: {float(observability.get('avg_tool_calls', 0.0)):.2f}",
         "",
     ]
 

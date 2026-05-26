@@ -101,6 +101,14 @@ def test_format_eval_report_includes_metrics_section_when_present():
                 "max_steps": {"count": 1, "rate": 0.25},
                 "tool_evidence_failures": {"count": 2, "rate": 0.5},
                 "scorer_failures": {"status": 1, "tool_evidence_contains": 2},
+                "trace_linkage": {"count": 3, "rate": 0.75},
+                "context_governance": {
+                    "compression_triggered": {"count": 2, "rate": 0.5},
+                    "avg_compression_ratio": 0.42,
+                    "avg_tokens_before_compression": 1000.0,
+                    "avg_tokens_after_compression": 580.0,
+                },
+                "observability": {"avg_llm_calls": 2.5, "avg_tool_calls": 1.25},
             }
         },
     )
@@ -115,3 +123,9 @@ def test_format_eval_report_includes_metrics_section_when_present():
     assert "- Max-step rate: 25.00% (1)" in markdown
     assert "- Tool-evidence failure rate: 50.00% (2)" in markdown
     assert "- Scorer failures: status=1, tool_evidence_contains=2" in markdown
+    assert "- Trace linkage rate: 75.00% (3)" in markdown
+    assert "- Compression trigger rate: 50.00% (2)" in markdown
+    assert "- Avg compression ratio: 42.00%" in markdown
+    assert "- Avg compression tokens: 1000.00 -> 580.00" in markdown
+    assert "- Avg LLM calls/task: 2.50" in markdown
+    assert "- Avg tool calls/task: 1.25" in markdown

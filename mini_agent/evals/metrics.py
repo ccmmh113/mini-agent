@@ -46,6 +46,9 @@ def compute_eval_metrics(report: EvalRunReport) -> dict[str, Any]:
         "max_steps": {"count": max_steps_count, "rate": _rate(max_steps_count, case_count)},
         "status_failures": {"count": status_failure_count, "rate": _rate(status_failure_count, case_count)},
         "tool_evidence_failures": {"count": tool_failure_count, "rate": _rate(tool_failure_count, case_count)},
+        "trace_linkage": _trace_linkage_metrics(results),
+        "context_governance": _context_governance_metrics(results),
+        "observability": _observability_metrics(results),
         "scorer_failures": _scorer_failures(results),
         "candidates": _candidate_metrics(results),
     }
@@ -82,6 +85,61 @@ def _scorer_failures(results: list[EvalResult]) -> dict[str, int]:
             if not passed:
                 failures[scorer] = failures.get(scorer, 0) + 1
     return dict(sorted(failures.items()))
+
+
+def _trace_linkage_metrics(results: list[EvalResult]) -> dict[str, Any]:
+    linked = sum(1 for result in results if result.agent_run_id)
+    return {"count": linked, "rate": _rate(linked, len(results))}
+
+
+def _context_governance_metrics(results: list[EvalResult]) -> dict[str, Any]:
+    contexts = [
+        result.metadata.get("context_governance")
+        for result in results
+        if isinstance(result.metadata.get("context_governance"), dict)
+    ]
+    triggered = sum(1 for context in contexts if context.get("compression_triggered") is True)
+    ratios = [_number(context.get("compression_ratio")) for context in contexts if _number(context.get("compression_ratio")) is not None]
+    before_tokens = [
+        _number(context.get("before_tokens")) for context in contexts if _number(context.get("before_tokens")) is not None
+    ]
+    after_tokens = [
+        _number(context.get("after_tokens")) for context in contexts if _number(context.get("after_tokens")) is not None
+    ]
+    return {
+        "case_count": len(contexts),
+        "compression_triggered": {"count": triggered, "rate": _rate(triggered, len(contexts))},
+        "avg_compression_ratio": _avg(ratios),
+        "avg_tokens_before_compression": _avg(before_tokens),
+        "avg_tokens_after_compression": _avg(after_tokens),
+    }
+
+
+def _observability_metrics(results: list[EvalResult]) -> dict[str, Any]:
+    observations = [
+        result.metadata.get("observability")
+        for result in results
+        if isinstance(result.metadata.get("observability"), dict)
+    ]
+    llm_calls = [
+        _number(observation.get("llm_call_count"))
+        for observation in observations
+        if _number(observation.get("llm_call_count")) is not None
+    ]
+    tool_calls = [
+        _number(observation.get("tool_call_count"))
+        for observation in observations
+        if _number(observation.get("tool_call_count")) is not None
+    ]
+    return {
+        "case_count": len(observations),
+        "avg_llm_calls": _avg(llm_calls),
+        "avg_tool_calls": _avg(tool_calls),
+    }
+
+
+def _number(value: Any) -> float | None:
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
 def _candidate_metrics(results: list[EvalResult]) -> dict[str, dict[str, Any]]:

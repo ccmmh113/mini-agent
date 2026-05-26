@@ -312,6 +312,36 @@ async def test_pipeline_uses_context_collapse_before_summarizing():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_records_compression_stats(tmp_path: Path):
+    messages = [
+        Message(role="system", content="System"),
+        Message(role="user", content="old " + "alpha " * 150),
+        Message(role="assistant", content="old answer " + "beta " * 150),
+        Message(role="user", content="latest"),
+    ]
+    summarizer = MagicMock()
+    summarizer.summarize_if_needed = AsyncMock(return_value=[Message(role="system", content="summary")])
+    pipeline = CompressionPipeline(
+        compactor=MessageCompactor(token_limit=80, workspace_dir=tmp_path),
+        context_collapser=ContextCollapser(token_limit=80),
+        summarizer=summarizer,
+        request_context_builder=EchoRequestContextBuilder(),
+        token_limit=80,
+    )
+
+    compacted = await pipeline.compress_before_request(messages=messages, api_total_tokens=10_000, tools=[])
+
+    assert compacted != messages
+    assert pipeline.stats
+    latest = pipeline.stats[-1]
+    assert latest["compression_triggered"] is True
+    assert latest["before_tokens"] > latest["after_tokens"]
+    assert 0 < latest["compression_ratio"] < 1
+    assert latest["before_message_count"] == len(messages)
+    assert latest["after_message_count"] == len(compacted)
+
+
+@pytest.mark.asyncio
 async def test_pipeline_uses_post_compaction_estimate_before_summarizing(tmp_path: Path):
     messages = [
         Message(role="system", content="System"),

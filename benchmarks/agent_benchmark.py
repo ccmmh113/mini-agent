@@ -479,6 +479,10 @@ async def run_eval_benchmark(
                 "llm_calls": result["llm_calls"],
                 "tool_messages": result["tool_messages"],
                 "message_count": result["message_count"],
+                "observability": {
+                    "llm_call_count": result["llm_calls"],
+                    "tool_call_count": result["tool_messages"],
+                },
             },
         )
 
@@ -913,7 +917,11 @@ async def run_real_case(
         },
         "cost": agent.cumulative_token_cost.model_dump(mode="json"),
         "metadata": {
-            "context_governance": _context_governance_metadata(agent, token_limit=case.token_limit or config.agent.token_limit)
+            "context_governance": _context_governance_metadata(agent, token_limit=case.token_limit or config.agent.token_limit),
+            "observability": {
+                "llm_call_count": sum(1 for message in agent.messages if message.role == "assistant"),
+                "tool_call_count": len(tool_messages),
+            },
         },
         "output": output,
         "workspace": str(workspace),
@@ -936,11 +944,21 @@ def _context_governance_metadata(agent: Agent, *, token_limit: int) -> dict[str,
         markers.append("micro_compact")
 
     markers = list(dict.fromkeys(markers))
+    compression_stats = list(getattr(agent.compression_pipeline, "stats", []))
+    triggered_stats = [stat for stat in compression_stats if stat.get("compression_triggered") is True]
+    token_stats = triggered_stats or compression_stats
+    before_tokens = max((int(stat.get("before_tokens", 0)) for stat in token_stats), default=0)
+    after_tokens = min((int(stat.get("after_tokens", before_tokens)) for stat in token_stats), default=0)
+    compression_ratio = 0.0 if before_tokens <= 0 else max(0.0, 1.0 - (after_tokens / before_tokens))
     return {
-        "compression_triggered": bool(markers),
+        "compression_triggered": bool(markers or triggered_stats),
         "compression_markers": markers,
         "token_limit": token_limit,
         "final_message_count": len(agent.messages),
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "compression_ratio": compression_ratio,
+        "compression_stats": compression_stats,
     }
 
 

@@ -31,6 +31,15 @@ def _metrics_report() -> EvalRunReport:
             duration_ms=100,
             total_tokens=10,
             total_cost=0.01,
+            metadata={
+                "context_governance": {
+                    "compression_triggered": True,
+                    "before_tokens": 1000,
+                    "after_tokens": 400,
+                    "compression_ratio": 0.6,
+                },
+                "observability": {"llm_call_count": 2, "tool_call_count": 1},
+            },
         ),
         EvalResult(
             eval_run_id="eval-1",
@@ -52,6 +61,15 @@ def _metrics_report() -> EvalRunReport:
             total_tokens=20,
             total_cost=0.02,
             failure_reason="tool evidence missing fragment: write_file",
+            metadata={
+                "context_governance": {
+                    "compression_triggered": False,
+                    "before_tokens": 500,
+                    "after_tokens": 500,
+                    "compression_ratio": 0.0,
+                },
+                "observability": {"llm_call_count": 1, "tool_call_count": 0},
+            },
         ),
         EvalResult(
             eval_run_id="eval-1",
@@ -96,6 +114,15 @@ def test_compute_eval_metrics_aggregates_latency_cost_tokens_and_failures():
     assert metrics["status_failures"]["count"] == 1
     assert metrics["tool_evidence_failures"]["count"] == 1
     assert metrics["scorer_failures"] == {"status": 1, "tool_evidence_contains": 1}
+    assert metrics["trace_linkage"]["count"] == 3
+    assert metrics["trace_linkage"]["rate"] == 1.0
+    assert metrics["context_governance"]["compression_triggered"]["count"] == 1
+    assert metrics["context_governance"]["compression_triggered"]["rate"] == 0.5
+    assert metrics["context_governance"]["avg_compression_ratio"] == 0.3
+    assert metrics["context_governance"]["avg_tokens_before_compression"] == 750
+    assert metrics["context_governance"]["avg_tokens_after_compression"] == 450
+    assert metrics["observability"]["avg_llm_calls"] == 1.5
+    assert metrics["observability"]["avg_tool_calls"] == 0.5
     assert metrics["candidates"]["gpt"]["pass_rate"] == 0.5
     assert metrics["candidates"]["deepseek"]["max_steps"] == 1
 
