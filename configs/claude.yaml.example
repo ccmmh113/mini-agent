@@ -1,7 +1,7 @@
 api_key: "replace-with-your-api-key"
 provider: "anthropic"
-api_base: "https://www.right.codes/claude-aws"
-model: "claude-opus-4-6"
+api_base: ""
+model: ""
 
 retry:
   enabled: true
