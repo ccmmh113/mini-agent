@@ -114,6 +114,9 @@ def _format_metrics_section(metrics: dict) -> list[str]:
     context = metrics.get("context_governance", {})
     compression_triggered = context.get("compression_triggered", {}) if isinstance(context, dict) else {}
     observability = metrics.get("observability", {})
+    memory = metrics.get("memory_effectiveness", {})
+    recall_called = memory.get("recall_notes_called", {}) if isinstance(memory, dict) else {}
+    redundant_avoided = memory.get("redundant_read_avoided", {}) if isinstance(memory, dict) else {}
     scorer_text = ", ".join(f"{key}={value}" for key, value in scorer_failures.items()) or "none"
     return [
         "## Metrics",
@@ -132,6 +135,12 @@ def _format_metrics_section(metrics: dict) -> list[str]:
         f"- Avg compression tokens: {float(context.get('avg_tokens_before_compression', 0.0)):.2f} -> {float(context.get('avg_tokens_after_compression', 0.0)):.2f}",
         f"- Avg LLM calls/task: {float(observability.get('avg_llm_calls', 0.0)):.2f}",
         f"- Avg tool calls/task: {float(observability.get('avg_tool_calls', 0.0)):.2f}",
+        f"- Memory recall usage: {_format_percent(float(recall_called.get('rate', 0.0)))} ({int(recall_called.get('count', 0))})",
+        f"- Redundant-read avoided rate: {_format_percent(float(redundant_avoided.get('rate', 0.0)))} ({int(redundant_avoided.get('count', 0))})",
+        f"- Avg recall_notes calls/task: {float(memory.get('avg_recall_notes_calls', 0.0)):.2f}",
+        f"- Avg read_file calls/task: {float(memory.get('avg_read_file_calls', 0.0)):.2f}",
+        f"- Avg record_note calls/task: {float(memory.get('avg_record_note_calls', 0.0)):.2f}",
+        f"- Estimated avoided read tokens: {int(memory.get('avoided_read_token_estimate', 0))}",
         "",
     ]
 

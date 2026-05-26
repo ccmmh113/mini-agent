@@ -357,6 +357,77 @@ async def test_real_eval_benchmark_converts_suite_fixtures_and_token_limit(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_real_eval_benchmark_records_memory_effectiveness_metadata(tmp_path, monkeypatch):
+    gpt_config = tmp_path / "gpt.yaml"
+    _write_candidate_config(gpt_config, provider="openai", model="gpt-4o")
+    candidates = load_real_eval_candidates([f"gpt={gpt_config}"])
+    suite = EvalSuite(
+        suite_id="memory",
+        name="Memory Effectiveness",
+        version="1",
+        tasks=[
+            EvalTask(
+                task_id="memory-reuse",
+                prompt="Read once, record memory, recall it, then write result.",
+                expected_files={"memory-result.md": ["MEMORY_REUSE_OK"]},
+                scorers=["status", "file_contains", "metadata_contains"],
+                metadata={
+                    "fixtures": {
+                        "archive/huge_source.md": "MEMORY_KEY=zircon\n" + "large context\n" * 200,
+                    },
+                    "memory_effectiveness": {
+                        "avoid_read_files": ["archive/huge_source.md"],
+                        "allowed_read_calls_per_avoided_file": 1,
+                    },
+                    "expected_metadata_contains": {
+                        "memory_effectiveness.recall_notes_calls": 1,
+                        "memory_effectiveness.read_file_calls": 1,
+                        "memory_effectiveness.record_note_calls": 1,
+                        "memory_effectiveness.redundant_read_avoided": True,
+                    },
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "benchmarks.agent_benchmark._build_real_llm",
+        lambda config: ScriptedLLM(
+            [
+                ScriptedResponse(tool_name="read_file", arguments={"path": "archive/huge_source.md"}),
+                ScriptedResponse(
+                    tool_name="record_note",
+                    arguments={
+                        "content": "MEMORY_REUSE_OK MEMORY_KEY=zircon",
+                        "type": "project",
+                        "name": "memory-reuse",
+                    },
+                ),
+                ScriptedResponse(tool_name="recall_notes", arguments={"query": "zircon", "limit": 1}),
+                ScriptedResponse(
+                    tool_name="write_file",
+                    arguments={"path": "memory-result.md", "content": "MEMORY_REUSE_OK\n"},
+                ),
+                ScriptedResponse(content="MEMORY_REUSE_OK"),
+            ]
+        ),
+    )
+
+    report = await run_real_eval_benchmark(
+        candidates=candidates,
+        output_root=tmp_path / "outputs",
+        suite=suite,
+    )
+
+    memory = report.results[0].metadata["memory_effectiveness"]
+    assert memory["tool_calls_by_name"]["read_file"] == 1
+    assert memory["tool_calls_by_name"]["record_note"] == 1
+    assert memory["tool_calls_by_name"]["recall_notes"] == 1
+    assert memory["redundant_read_avoided"] is True
+    assert memory["avoided_read_token_estimate"] > 0
+    assert report.metadata["metrics"]["memory_effectiveness"]["recall_notes_called"]["rate"] == 1.0
+
+
+@pytest.mark.asyncio
 async def test_real_eval_benchmark_enables_checkpoint_and_task_memory_from_suite(tmp_path, monkeypatch):
     gpt_config = tmp_path / "gpt.yaml"
     _write_candidate_config(gpt_config, provider="openai", model="gpt-4o")

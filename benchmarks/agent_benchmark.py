@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable
 from mini_agent.agent import Agent
 from mini_agent.checkpoint import CheckpointStore
 from mini_agent.config import Config
+from mini_agent.context_budget import count_text_tokens
 from mini_agent.evals import (
     EvalCandidate,
     EvalExecution,
@@ -549,6 +550,7 @@ class RealBenchmarkCase:
     token_limit: int | None = None
     enable_checkpoint: bool = False
     enable_task_memory: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -824,6 +826,7 @@ def _real_cases_from_suite(suite: EvalSuite) -> list[RealBenchmarkCase]:
             token_limit=_task_token_limit(task),
             enable_checkpoint=_task_agent_override_bool(task, "enable_checkpoint"),
             enable_task_memory=_task_agent_override_bool(task, "enable_task_memory"),
+            metadata=dict(task.metadata),
         )
         for task in suite.tasks
     ]
@@ -908,6 +911,7 @@ async def run_real_case(
         "completed": agent.last_run_completed,
     }
     status = "completed" if agent.last_run_completed else "failed"
+    tool_stats = _tool_call_stats(agent)
 
     return {
         "name": case.name,
@@ -938,10 +942,63 @@ async def run_real_case(
             "observability": {
                 "llm_call_count": sum(1 for message in agent.messages if message.role == "assistant"),
                 "tool_call_count": len(tool_messages),
+                "tool_calls_by_name": tool_stats["by_name"],
             },
+            "memory_effectiveness": _memory_effectiveness_metadata(case, tool_stats),
         },
         "output": output,
         "workspace": str(workspace),
+    }
+
+
+def _tool_call_stats(agent: Agent) -> dict[str, Any]:
+    by_name: dict[str, int] = {}
+    read_file_paths: dict[str, int] = {}
+    for message in agent.messages:
+        for tool_call in message.tool_calls or []:
+            tool_name = tool_call.function.name
+            by_name[tool_name] = by_name.get(tool_name, 0) + 1
+            if tool_name == "read_file":
+                path = str(tool_call.function.arguments.get("path", ""))
+                if path:
+                    read_file_paths[path] = read_file_paths.get(path, 0) + 1
+    return {"by_name": by_name, "read_file_paths": read_file_paths}
+
+
+def _memory_effectiveness_metadata(case: RealBenchmarkCase, tool_stats: dict[str, Any]) -> dict[str, Any]:
+    by_name = tool_stats.get("by_name") if isinstance(tool_stats.get("by_name"), dict) else {}
+    read_file_paths = (
+        tool_stats.get("read_file_paths")
+        if isinstance(tool_stats.get("read_file_paths"), dict)
+        else {}
+    )
+    settings = case.metadata.get("memory_effectiveness")
+    settings = settings if isinstance(settings, dict) else {}
+    avoid_read_files = settings.get("avoid_read_files", [])
+    if not isinstance(avoid_read_files, list):
+        avoid_read_files = []
+    try:
+        allowed_read_calls = int(settings.get("allowed_read_calls_per_avoided_file", 0))
+    except (TypeError, ValueError):
+        allowed_read_calls = 0
+
+    redundant_read_avoided = bool(avoid_read_files) and all(
+        int(read_file_paths.get(str(path), 0)) <= allowed_read_calls
+        for path in avoid_read_files
+    )
+    avoided_tokens = 0
+    if redundant_read_avoided:
+        avoided_tokens = sum(count_text_tokens(case.files.get(str(path), "")) for path in avoid_read_files)
+
+    return {
+        "tool_calls_by_name": dict(by_name),
+        "read_file_calls": int(by_name.get("read_file", 0)),
+        "record_note_calls": int(by_name.get("record_note", 0)),
+        "recall_notes_calls": int(by_name.get("recall_notes", 0)),
+        "read_file_paths": dict(read_file_paths),
+        "redundant_read_avoided": redundant_read_avoided,
+        "avoided_read_files": [str(path) for path in avoid_read_files],
+        "avoided_read_token_estimate": avoided_tokens,
     }
 
 

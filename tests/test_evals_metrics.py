@@ -39,6 +39,13 @@ def _metrics_report() -> EvalRunReport:
                     "compression_ratio": 0.6,
                 },
                 "observability": {"llm_call_count": 2, "tool_call_count": 1},
+                "memory_effectiveness": {
+                    "recall_notes_calls": 1,
+                    "read_file_calls": 0,
+                    "record_note_calls": 1,
+                    "redundant_read_avoided": True,
+                    "avoided_read_token_estimate": 300,
+                },
             },
         ),
         EvalResult(
@@ -69,6 +76,13 @@ def _metrics_report() -> EvalRunReport:
                     "compression_ratio": 0.0,
                 },
                 "observability": {"llm_call_count": 1, "tool_call_count": 0},
+                "memory_effectiveness": {
+                    "recall_notes_calls": 0,
+                    "read_file_calls": 2,
+                    "record_note_calls": 0,
+                    "redundant_read_avoided": False,
+                    "avoided_read_token_estimate": 0,
+                },
             },
         ),
         EvalResult(
@@ -123,6 +137,14 @@ def test_compute_eval_metrics_aggregates_latency_cost_tokens_and_failures():
     assert metrics["context_governance"]["avg_tokens_after_compression"] == 450
     assert metrics["observability"]["avg_llm_calls"] == 1.5
     assert metrics["observability"]["avg_tool_calls"] == 0.5
+    assert metrics["memory_effectiveness"]["recall_notes_called"]["count"] == 1
+    assert metrics["memory_effectiveness"]["recall_notes_called"]["rate"] == 0.5
+    assert metrics["memory_effectiveness"]["redundant_read_avoided"]["count"] == 1
+    assert metrics["memory_effectiveness"]["redundant_read_avoided"]["rate"] == 0.5
+    assert metrics["memory_effectiveness"]["avg_recall_notes_calls"] == 0.5
+    assert metrics["memory_effectiveness"]["avg_read_file_calls"] == 1.0
+    assert metrics["memory_effectiveness"]["avg_record_note_calls"] == 0.5
+    assert metrics["memory_effectiveness"]["avoided_read_token_estimate"] == 300
     assert metrics["candidates"]["gpt"]["pass_rate"] == 0.5
     assert metrics["candidates"]["deepseek"]["max_steps"] == 1
 

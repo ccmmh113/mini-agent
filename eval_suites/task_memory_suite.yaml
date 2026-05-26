@@ -259,3 +259,222 @@ tasks:
       agent_overrides:
         enable_task_memory: true
         token_limit: 2400
+
+  - task_id: memory_recall_reduces_redundant_reading
+    description: A two-phase task should read a large source once, store the key fact, then use recall_notes instead of rereading it.
+    prompt: >
+      这是一个两阶段记忆有效性测试。
+      第一阶段：读取 archive/product_spec_large.md，找到当前评测规范的关键事实，
+      然后使用 record_note 把这个事实记录成长期记忆，记忆内容必须包含
+      MEMORY_RECALL_REUSE_OK、REPORT_FORMAT=EvalRunReport、TRACE_REQUIRED=true。
+      第二阶段：不要再次读取 archive/product_spec_large.md；请使用 recall_notes 召回刚才记录的事实，
+      然后创建 memory/reuse_from_recall.md。
+      文件必须包含 MEMORY_RECALL_REUSE_OK、REPORT_FORMAT=EvalRunReport、TRACE_REQUIRED=true、
+      RECALL_USED=true。
+      完成后回复必须包含 MEMORY_RECALL_REUSE_OK。
+    expected_output_contains:
+      - MEMORY_RECALL_REUSE_OK
+    expected_tool_evidence_contains:
+      - Recorded memory
+      - MEMORY_RECALL_REUSE_OK
+    expected_files:
+      memory/reuse_from_recall.md:
+        - MEMORY_RECALL_REUSE_OK
+        - REPORT_FORMAT=EvalRunReport
+        - TRACE_REQUIRED=true
+        - RECALL_USED=true
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - tool_evidence_contains
+      - metadata_contains
+    metadata:
+      fixtures:
+        archive/product_spec_large.md: |
+          # Product Specification Archive
+
+          MEMORY_RECALL_REUSE_OK
+          REPORT_FORMAT=EvalRunReport
+          TRACE_REQUIRED=true
+          SQLITE_TRACE=agent_run_id linkage
+
+          The rest of this file is intentionally large so rereading it would waste tokens.
+          Section 001: background requirements that are not needed after memory is recorded.
+          Section 002: background requirements that are not needed after memory is recorded.
+          Section 003: background requirements that are not needed after memory is recorded.
+          Section 004: background requirements that are not needed after memory is recorded.
+          Section 005: background requirements that are not needed after memory is recorded.
+          Section 006: background requirements that are not needed after memory is recorded.
+          Section 007: background requirements that are not needed after memory is recorded.
+          Section 008: background requirements that are not needed after memory is recorded.
+          Section 009: background requirements that are not needed after memory is recorded.
+          Section 010: background requirements that are not needed after memory is recorded.
+          Section 011: background requirements that are not needed after memory is recorded.
+          Section 012: background requirements that are not needed after memory is recorded.
+          Section 013: background requirements that are not needed after memory is recorded.
+          Section 014: background requirements that are not needed after memory is recorded.
+          Section 015: background requirements that are not needed after memory is recorded.
+          Section 016: background requirements that are not needed after memory is recorded.
+          Section 017: background requirements that are not needed after memory is recorded.
+          Section 018: background requirements that are not needed after memory is recorded.
+          Section 019: background requirements that are not needed after memory is recorded.
+          Section 020: background requirements that are not needed after memory is recorded.
+      memory_effectiveness:
+        avoid_read_files:
+          - archive/product_spec_large.md
+        allowed_read_calls_per_avoided_file: 1
+      expected_metadata_contains:
+        memory_effectiveness.read_file_calls: 1
+        memory_effectiveness.record_note_calls: 1
+        memory_effectiveness.recall_notes_calls: 1
+        memory_effectiveness.redundant_read_avoided: true
+      agent_overrides:
+        token_limit: 2600
+
+  - task_id: task_memory_cross_task_continuation
+    description: Active task memory should let the agent continue a previous task using recorded design constraints.
+    prompt: >
+      请按之前约定生成配置，不要重新询问约定内容。
+      使用 Current Task Context 中的已记录决策创建 memory/continued_config.yaml。
+      文件必须包含 preferred_provider: gpt、report_format: EvalRunReport、
+      trace_required: true、CONTINUATION_OK。
+      完成后回复必须包含 CONTINUATION_OK。
+    expected_output_contains:
+      - CONTINUATION_OK
+    expected_files:
+      memory/continued_config.yaml:
+        - "preferred_provider: gpt"
+        - "report_format: EvalRunReport"
+        - "trace_required: true"
+        - CONTINUATION_OK
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+    metadata:
+      fixtures:
+        .mini_agent/task_memory.json: |
+          {
+            "active_task_id": "task-cross-continuation",
+            "tasks": [
+              {
+                "task_id": "task-cross-continuation",
+                "goal": "Continue the eval configuration task using previous constraints",
+                "task_type": "evaluation",
+                "status": "active",
+                "completed_steps": [
+                  {
+                    "description": "Collected prior design constraints for memory evaluation",
+                    "timestamp": "2026-05-20T11:00:00",
+                    "source": "auto"
+                  }
+                ],
+                "decisions": [
+                  {
+                    "decision": "preferred_provider=gpt",
+                    "timestamp": "2026-05-20T11:01:00",
+                    "reason": "Use GPT as the baseline candidate"
+                  },
+                  {
+                    "decision": "report_format=EvalRunReport",
+                    "timestamp": "2026-05-20T11:02:00",
+                    "reason": "Standard report contract"
+                  },
+                  {
+                    "decision": "trace_required=true",
+                    "timestamp": "2026-05-20T11:03:00",
+                    "reason": "Eval result must link to trace"
+                  }
+                ],
+                "artifacts": [],
+                "open_questions": [],
+                "next_steps": [
+                  {
+                    "description": "Generate the config artifact using the recorded decisions",
+                    "timestamp": "2026-05-20T11:04:00",
+                    "source": "auto"
+                  }
+                ],
+                "archived_steps_summary": "",
+                "created_at": "2026-05-20T11:00:00",
+                "updated_at": "2026-05-20T11:04:00",
+                "summary": "",
+                "completed_by": null,
+                "source": "auto",
+                "resume_events": []
+              }
+            ]
+          }
+      agent_overrides:
+        enable_task_memory: true
+        token_limit: 2200
+
+  - task_id: long_term_memory_selects_correct_record_under_similar_noise
+    description: Recall should select the correct memory record when several similar memories exist.
+    prompt: >
+      请使用 recall_notes 查询 routing-sentinel 相关长期记忆，然后创建 memory/routing_decision.md。
+      多条记忆都在谈模型路由，但只有一条包含 ROUTING_SENTINEL=eval-routing-v2。
+      文件必须包含 MEMORY_NOISE_FILTER_OK、ROUTING_SENTINEL=eval-routing-v2、
+      PROVIDER_ORDER=gpt,deepseek,claude。
+      不能包含 ROUTING_SENTINEL=old-routing-v1 或 PROVIDER_ORDER=claude-only。
+      完成后回复必须包含 MEMORY_NOISE_FILTER_OK。
+    expected_output_contains:
+      - MEMORY_NOISE_FILTER_OK
+    expected_tool_evidence_contains:
+      - ROUTING_SENTINEL=eval-routing-v2
+    expected_files:
+      memory/routing_decision.md:
+        - MEMORY_NOISE_FILTER_OK
+        - ROUTING_SENTINEL=eval-routing-v2
+        - PROVIDER_ORDER=gpt,deepseek,claude
+    scorers:
+      - status
+      - output_contains
+      - file_contains
+      - tool_evidence_contains
+      - file_excludes
+      - metadata_contains
+    metadata:
+      fixtures:
+        .memory/routing-current.md: |
+          ---
+          name: routing-current
+          description: routing-sentinel current model routing decision
+          type: project
+          created_at: 2026-05-21T10:00:00
+          updated_at: 2026-05-21T10:00:00
+          ---
+
+          MEMORY_NOISE_FILTER_OK
+          ROUTING_SENTINEL=eval-routing-v2
+          PROVIDER_ORDER=gpt,deepseek,claude
+        .memory/routing-old.md: |
+          ---
+          name: routing-old
+          description: old model routing decision
+          type: project
+          created_at: 2026-04-01T10:00:00
+          updated_at: 2026-04-01T10:00:00
+          ---
+
+          ROUTING_SENTINEL=old-routing-v1
+          PROVIDER_ORDER=claude-only
+        .memory/routing-note.md: |
+          ---
+          name: routing-note
+          description: general routing notes without sentinel
+          type: project
+          created_at: 2026-04-15T10:00:00
+          updated_at: 2026-04-15T10:00:00
+          ---
+
+          Provider routing must be verified against the current sentinel before use.
+      expected_files_not_contains:
+        memory/routing_decision.md:
+          - ROUTING_SENTINEL=old-routing-v1
+          - PROVIDER_ORDER=claude-only
+      expected_metadata_contains:
+        memory_effectiveness.recall_notes_calls: 1
+      agent_overrides:
+        token_limit: 2400

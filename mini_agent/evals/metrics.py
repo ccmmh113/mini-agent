@@ -49,6 +49,7 @@ def compute_eval_metrics(report: EvalRunReport) -> dict[str, Any]:
         "trace_linkage": _trace_linkage_metrics(results),
         "context_governance": _context_governance_metrics(results),
         "observability": _observability_metrics(results),
+        "memory_effectiveness": _memory_effectiveness_metrics(results),
         "scorer_failures": _scorer_failures(results),
         "candidates": _candidate_metrics(results),
     }
@@ -135,6 +136,48 @@ def _observability_metrics(results: list[EvalResult]) -> dict[str, Any]:
         "case_count": len(observations),
         "avg_llm_calls": _avg(llm_calls),
         "avg_tool_calls": _avg(tool_calls),
+    }
+
+
+def _memory_effectiveness_metrics(results: list[EvalResult]) -> dict[str, Any]:
+    memories = [
+        result.metadata.get("memory_effectiveness")
+        for result in results
+        if isinstance(result.metadata.get("memory_effectiveness"), dict)
+    ]
+    recall_calls = [
+        _number(memory.get("recall_notes_calls"))
+        for memory in memories
+        if _number(memory.get("recall_notes_calls")) is not None
+    ]
+    read_calls = [
+        _number(memory.get("read_file_calls"))
+        for memory in memories
+        if _number(memory.get("read_file_calls")) is not None
+    ]
+    record_calls = [
+        _number(memory.get("record_note_calls"))
+        for memory in memories
+        if _number(memory.get("record_note_calls")) is not None
+    ]
+    recall_used = sum(
+        1
+        for memory in memories
+        if _number(memory.get("recall_notes_calls")) and memory.get("recall_notes_calls", 0) > 0
+    )
+    redundant_avoided = sum(1 for memory in memories if memory.get("redundant_read_avoided") is True)
+    avoided_tokens = sum(
+        _number(memory.get("avoided_read_token_estimate")) or 0.0
+        for memory in memories
+    )
+    return {
+        "case_count": len(memories),
+        "recall_notes_called": {"count": recall_used, "rate": _rate(recall_used, len(memories))},
+        "redundant_read_avoided": {"count": redundant_avoided, "rate": _rate(redundant_avoided, len(memories))},
+        "avg_recall_notes_calls": _avg(recall_calls),
+        "avg_read_file_calls": _avg(read_calls),
+        "avg_record_note_calls": _avg(record_calls),
+        "avoided_read_token_estimate": int(avoided_tokens),
     }
 
 

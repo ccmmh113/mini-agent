@@ -109,6 +109,14 @@ def test_format_eval_report_includes_metrics_section_when_present():
                     "avg_tokens_after_compression": 580.0,
                 },
                 "observability": {"avg_llm_calls": 2.5, "avg_tool_calls": 1.25},
+                "memory_effectiveness": {
+                    "recall_notes_called": {"count": 3, "rate": 0.75},
+                    "redundant_read_avoided": {"count": 2, "rate": 0.5},
+                    "avg_recall_notes_calls": 1.5,
+                    "avg_read_file_calls": 0.5,
+                    "avg_record_note_calls": 0.25,
+                    "avoided_read_token_estimate": 1200,
+                },
             }
         },
     )
@@ -129,3 +137,8 @@ def test_format_eval_report_includes_metrics_section_when_present():
     assert "- Avg compression tokens: 1000.00 -> 580.00" in markdown
     assert "- Avg LLM calls/task: 2.50" in markdown
     assert "- Avg tool calls/task: 1.25" in markdown
+    assert "- Memory recall usage: 75.00% (3)" in markdown
+    assert "- Redundant-read avoided rate: 50.00% (2)" in markdown
+    assert "- Avg recall_notes calls/task: 1.50" in markdown
+    assert "- Avg read_file calls/task: 0.50" in markdown
+    assert "- Estimated avoided read tokens: 1200" in markdown

@@ -123,6 +123,9 @@ def test_task_memory_suite_includes_memory_effectiveness_cases():
         "task_memory_reuses_active_state_without_rereading_large_source",
         "task_memory_prefers_latest_instruction_over_stale_memory",
         "task_memory_episode_records_cross_task_summary",
+        "memory_recall_reduces_redundant_reading",
+        "task_memory_cross_task_continuation",
+        "long_term_memory_selects_correct_record_under_similar_noise",
     }.issubset(task_ids)
 
     reuse_task = next(
@@ -132,3 +135,8 @@ def test_task_memory_suite_includes_memory_effectiveness_cases():
     )
     assert "tool_evidence_excludes" in reuse_task.scorers
     assert reuse_task.metadata["expected_tool_evidence_not_contains"] == ["DO_NOT_REREAD_HUGE_SOURCE"]
+
+    recall_task = next(task for task in suite.tasks if task.task_id == "memory_recall_reduces_redundant_reading")
+    assert "metadata_contains" in recall_task.scorers
+    assert recall_task.metadata["memory_effectiveness"]["avoid_read_files"] == ["archive/product_spec_large.md"]
+    assert recall_task.metadata["memory_effectiveness"]["allowed_read_calls_per_avoided_file"] == 1
